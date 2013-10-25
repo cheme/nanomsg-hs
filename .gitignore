@@ -1,0 +1,11 @@
+cabal-dev
+.cabal-sandbox
+dist
+*.swp
+*.swo
+*.hi
+*.o
+main
+test/runTest
+tags
+
