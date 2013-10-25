@@ -8,4 +8,7 @@ dist
 main
 test/runTest
 tags
+*.chi
+*.chs.h
+System/NanoMsg/C/NanoMsg.hs
 

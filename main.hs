@@ -18,7 +18,7 @@ main = do
                       case r of 
                          Just r' -> showEr r'
                          Nothing -> return ()
-   -- try to overflow
+   -- try to overflow 
    alres <- nnAllocmsg 100000000000 0
    case alres of
       Left a -> showEr a
