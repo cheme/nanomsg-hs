@@ -11,4 +11,5 @@ tags
 *.chi
 *.chs.h
 System/NanoMsg/C/NanoMsg.hs
+System/NanoMsg/C/NanoMsgStruct.hs
 

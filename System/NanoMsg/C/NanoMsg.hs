@@ -3,9 +3,11 @@
 
 
 {-# LINE 1 "System/NanoMsg/C/NanoMsg.chs" #-}{-# LANGUAGE CPP, ForeignFunctionInterface #-}
-
+  
 module System.NanoMsg.C.NanoMsg where
 -- | This module aims at exposing nanomsg function directly to haskell, no api construct except the use of ForeignFreePointers. Function specific documentation is therefore the official nanomsg documentation. An exception is also done for error handling, here we use maybe or either. Note that it is a c2hs module and that returning type of function may contain function parameter when they may be changed (a tuple with firstly function return type then all parameters in order).
+-- Send and receive function are not set unsafe, this is thread unsafe, but waiting for some issue (during tests) to set them safe and use similar work arround as in zmq binding (nowait all the time but use haskell threadWriteRead to wait in a ghc non blocking thread way).
+import System.NanoMsg.C.NanoMsgStruct
 import Foreign
 import Foreign.C.Types
 import Foreign.C.String
@@ -17,7 +19,10 @@ import Control.Monad((<=<))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Unsafe as U
+import qualified Data.List as L
 
+
+-- TODO change all size_t to Int (currently Integer)
 
 -- #include "nanomsg/transport.h"
 -- #include "nanomsg/protocol.h"
@@ -137,7 +142,7 @@ instance Enum AddressFamilies where
   toEnum 2 = AF_SP_RAW
   toEnum unmatched = error ("AddressFamilies.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 69 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 74 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 data NnTransport = NN_IPC
                  | NN_INPROC
@@ -153,7 +158,7 @@ instance Enum NnTransport where
   toEnum (-3) = NN_TCP
   toEnum unmatched = error ("NnTransport.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 74 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 79 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- TODO associate to their protocol
 data ProtocolFamilies = NN_PROTO_PUBSUB
                       | NN_PROTO_BUS
@@ -178,7 +183,7 @@ instance Enum ProtocolFamilies where
   toEnum 6 = NN_PROTO_SURVEY
   toEnum unmatched = error ("ProtocolFamilies.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 82 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 87 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 data NnProtocol = NN_PUB
                 | NN_SUB
@@ -215,7 +220,7 @@ instance Enum NnProtocol where
   toEnum 97 = NN_RESPONDENT
   toEnum unmatched = error ("NnProtocol.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 94 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 99 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 
 -- | those constants might be useless, if they are of any use we might consider using c2hs #const instead
@@ -227,7 +232,7 @@ instance Enum NNConstants where
   toEnum 128 = NN_SOCKADDR_MAX
   toEnum unmatched = error ("NNConstants.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 100 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 105 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 data SolSocket = NN_SOL_SOCKET
                deriving (Eq,Ord,Show)
@@ -237,7 +242,7 @@ instance Enum SolSocket where
   toEnum 0 = NN_SOL_SOCKET
   toEnum unmatched = error ("SolSocket.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 104 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 109 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 
 data SocketOptions = NN_LINGER
@@ -278,7 +283,7 @@ instance Enum SocketOptions where
   toEnum 14 = NN_IPV4ONLY
   toEnum unmatched = error ("SocketOptions.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 119 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 124 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 data SocketReadOptions = NN_DOMAIN
                        | NN_PROTOCOL
@@ -291,7 +296,7 @@ instance Enum SocketReadOptions where
   toEnum 13 = NN_PROTOCOL
   toEnum unmatched = error ("SocketReadOptions.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 124 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 129 "System/NanoMsg/C/NanoMsg.chs" #-}
  
 data PubSubOptions = NN_REQ_RESEND_IVL
                    deriving (Eq,Ord,Show)
@@ -301,7 +306,7 @@ instance Enum PubSubOptions where
   toEnum 1 = NN_REQ_RESEND_IVL
   toEnum unmatched = error ("PubSubOptions.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 128 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 133 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 data SurveyOptions = NN_SURVEYOR_DEADLINE
                    deriving (Eq,Ord,Show)
@@ -311,7 +316,7 @@ instance Enum SurveyOptions where
   toEnum 1 = NN_SURVEYOR_DEADLINE
   toEnum unmatched = error ("SurveyOptions.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 132 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 137 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 
 data ReqRepOptions = NN_SUB_SUBSCRIBE
@@ -325,7 +330,7 @@ instance Enum ReqRepOptions where
   toEnum 2 = NN_SUB_UNSUBSCRIBE
   toEnum unmatched = error ("ReqRepOptions.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 138 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 143 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 data TcpOptions = NN_TCP_NODELAY
                 deriving (Eq,Ord,Show)
@@ -335,7 +340,7 @@ instance Enum TcpOptions where
   toEnum 1 = NN_TCP_NODELAY
   toEnum unmatched = error ("TcpOptions.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 142 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 147 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 
 -- | internal only
@@ -362,7 +367,10 @@ instance Enum SndRcvFlags where
   toEnum 1 = NN_DONTWAIT
   toEnum unmatched = error ("SndRcvFlags.toEnum: Cannot match " ++ show unmatched)
 
-{-# LINE 162 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 167 "System/NanoMsg/C/NanoMsg.chs" #-}
+
+flagsToCInt :: Enum a => [a] -> CInt
+flagsToCInt b = L.foldl' (\ac en -> ac + cIntFromEnum en ) 0  b
 
 cIntToEnum :: Enum a => CInt -> a
 cIntToEnum = toEnum . fromIntegral
@@ -370,11 +378,24 @@ cIntToEnum = toEnum . fromIntegral
 cIntFromEnum :: Enum a => a -> CInt
 cIntFromEnum = fromIntegral . fromEnum
 
-peekInt :: Ptr CInt -> IO Int
+peekInt :: (Storable a, Integral a) => Ptr a -> IO Int
 peekInt = (liftM fromIntegral) . peek
 
 peekInteger :: (Storable a, Integral a) => Ptr a -> IO Integer
 peekInteger = (liftM toInteger) . peek
+-- TODO inline
+withPStorable :: (Storable a) => a -> (Ptr a -> IO b)  -> IO b
+withPStorable i r = alloca (\p -> poke p i >> r p) 
+withPStorable' i r = alloca (\p -> poke p i >> r (castPtr p)) 
+
+withPIntegral :: (Storable a, Num a, Integral c) => c -> (Ptr a -> IO b)  -> IO b
+withPIntegral i = withPStorable (fromIntegral i)
+
+--withPForeign :: ForeignPtr () -> (Ptr () -> IO b)  -> IO b
+--withPForeign fp r = withForeignPtr fp (\p -> alloca (\pp -> poke pp p >> r (castPtr pp)))
+
+withPPtr :: Ptr () -> (Ptr () -> IO b)  -> IO b
+withPPtr p r = alloca (\pp -> poke pp p >> r (castPtr pp))
 
 
 foreignFree :: Ptr a -> IO(ForeignPtr a)
@@ -382,6 +403,20 @@ foreignFree = newForeignPtr finalizerFree
 
 foreignVoid :: Ptr () -> IO(ForeignPtr ())
 foreignVoid = newForeignPtr finalizerFree
+
+foreignPMsg :: Ptr () -> IO(ForeignPtr ())
+foreignPMsg pv = do 
+  v <- peek (castPtr pv)
+  free pv
+  newForeignPtr nnFunPtrFreeMsg v
+
+pVoid :: Ptr () -> IO(Ptr ())
+pVoid pv = do 
+  v <- peek (castPtr pv)
+  free pv
+  return v
+
+
 
 foreignFreeMsg :: Ptr () -> IO(Either NnError (ForeignPtr ()))
 foreignFreeMsg =  either (return . Left) (return . Right <=< newForeignPtr nnFunPtrFreeMsg) <=< errorFromNewPointer
@@ -413,7 +448,7 @@ nnErrno =
   nnErrno'_ >>= \res ->
   let {res' = cIntToEnum res} in
   return (res')
-{-# LINE 208 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 243 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- Mostly useless as c2hs uses macro, so no mapping from Int values to Enum
 nnSymbol :: (Int) -> IO ((String), (Int))
 nnSymbol a1 =
@@ -423,18 +458,18 @@ nnSymbol a1 =
   peekCString res >>= \res' ->
   peekInt  a2'>>= \a2'' -> 
   return (res', a2'')
-{-# LINE 210 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 245 "System/NanoMsg/C/NanoMsg.chs" #-}
 nnStrerror :: (NnError) -> IO ((String))
 nnStrerror a1 =
   let {a1' = cIntFromEnum a1} in 
   nnStrerror'_ a1' >>= \res ->
   peekCString res >>= \res' ->
   return (res')
-{-# LINE 211 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 246 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 -- TODO code from sample to catch errors
 dummy' = nnTerm
-{-# LINE 214 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 249 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 -- type of allocation is transport dependant -- see transport implementation --> for haskell api link it to the transport used -- TODO (tricky??)
 nnAllocmsg' :: (Integer) -> (Int) -> IO ((Either NnError (ForeignPtr ())))
@@ -444,7 +479,7 @@ nnAllocmsg' a1 a2 =
   nnAllocmsg''_ a1' a2' >>= \res ->
   foreignFreeMsg res >>= \res' ->
   return (res')
-{-# LINE 217 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 252 "System/NanoMsg/C/NanoMsg.chs" #-}
 nnAllocmsg :: (Integer) -> (Int) -> IO ((Either NnError (Ptr ())))
 nnAllocmsg a1 a2 =
   let {a1' = fromIntegral a1} in 
@@ -452,7 +487,7 @@ nnAllocmsg a1 a2 =
   nnAllocmsg'_ a1' a2' >>= \res ->
   errorFromNewPointer res >>= \res' ->
   return (res')
-{-# LINE 218 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 253 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 -- do not use if nnAllocmsg' used
 nnFreemsg :: (Ptr ()) -> IO ((Maybe NnError))
@@ -461,43 +496,72 @@ nnFreemsg a1 =
   nnFreemsg'_ a1' >>= \res ->
   errorFromRetCode res >>= \res' ->
   return (res')
-{-# LINE 221 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 256 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 -- not c2hs (to type it explicitly as a funPtr for finalizer) TODO test if discarding result is an issue with linking -- Internal use only 
 foreign import ccall "System/NanoMsg/C/NanoMsg.chs.h &nn_freemsg"
    nnFunPtrFreeMsg :: FunPtr (Ptr () -> IO ())
 
-cmsgFirsthdr :: (NnMsghdr) -> IO ((NnCmsghdr))
-cmsgFirsthdr a1 =
+cmsgFirsthdr2 :: (NnMsghdr) -> IO ((NnCmsghdr))
+cmsgFirsthdr2 a1 =
   let {a1' = fromMsghdr a1} in 
-  cmsgFirsthdr'_ a1' >>= \res ->
+  cmsgFirsthdr2'_ a1' >>= \res ->
   let {res' = toCmsghdr res} in
   return (res')
-{-# LINE 227 "System/NanoMsg/C/NanoMsg.chs" #-}
-cmsgNxthdr :: (NnMsghdr) -> (NnCmsghdr) -> IO ((Maybe NnCmsghdr))
-cmsgNxthdr a1 a2 =
+{-# LINE 262 "System/NanoMsg/C/NanoMsg.chs" #-}
+cmsgFirstHdr :: (NNMsgHdr) -> IO ((Maybe NNCMsgHdr))
+cmsgFirstHdr a1 =
+  fromMsgHdr a1 $ \a1' -> 
+  cmsgFirstHdr'_ a1' >>= \res ->
+  maybeCMsg res >>= \res' ->
+  return (res')
+{-# LINE 263 "System/NanoMsg/C/NanoMsg.chs" #-}
+cmsgNxthdr2 :: (NnMsghdr) -> (NnCmsghdr) -> IO ((Maybe NnCmsghdr))
+cmsgNxthdr2 a1 a2 =
   let {a1' = fromMsghdr a1} in 
   let {a2' = fromCmsghdr a2} in 
-  cmsgNxthdr'_ a1' a2' >>= \res ->
+  cmsgNxthdr2'_ a1' a2' >>= \res ->
   let {res' = maybeCmsg res} in
   return (res')
-{-# LINE 228 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 264 "System/NanoMsg/C/NanoMsg.chs" #-}
+cmsgNxtHdr :: (NNMsgHdr) -> (NNCMsgHdr) -> IO ((Maybe NNCMsgHdr))
+cmsgNxtHdr a1 a2 =
+  fromMsgHdr a1 $ \a1' -> 
+  fromCMsgHdr a2 $ \a2' -> 
+  cmsgNxtHdr'_ a1' a2' >>= \res ->
+  maybeCMsg res >>= \res' ->
+  return (res')
+{-# LINE 265 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- | use of byteString for char * here. Note that Bytestring is copied. -- not we use unsigned char and do a cast ptr : ByteString should not be use with unicode.
-cmsgData :: (NnCmsghdr) -> IO ((ByteString))
-cmsgData a1 =
+cmsgData2 :: (NnCmsghdr) -> IO ((ByteString))
+cmsgData2 a1 =
   let {a1' = fromCmsghdr a1} in 
+  cmsgData2'_ a1' >>= \res ->
+  ucPackCString res >>= \res' ->
+  return (res')
+{-# LINE 267 "System/NanoMsg/C/NanoMsg.chs" #-}
+cmsgData :: (NNCMsgHdr) -> IO ((ByteString))
+cmsgData a1 =
+  fromCMsgHdr a1 $ \a1' -> 
   cmsgData'_ a1' >>= \res ->
   ucPackCString res >>= \res' ->
   return (res')
-{-# LINE 230 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 268 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- | unsafe version for efficiency. To test but might be ok.
-cmsgData' :: (NnCmsghdr) -> IO ((ByteString))
-cmsgData' a1 =
+cmsgData2' :: (NnCmsghdr) -> IO ((ByteString))
+cmsgData2' a1 =
   let {a1' = fromCmsghdr a1} in 
+  cmsgData2''_ a1' >>= \res ->
+  uuPackCString res >>= \res' ->
+  return (res')
+{-# LINE 270 "System/NanoMsg/C/NanoMsg.chs" #-}
+cmsgData' :: (NNCMsgHdr) -> IO ((ByteString))
+cmsgData' a1 =
+  fromCMsgHdr a1 $ \a1' -> 
   cmsgData''_ a1' >>= \res ->
   uuPackCString res >>= \res' ->
   return (res')
-{-# LINE 232 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 271 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- | might not be pure in the future but given current nanomsg implementation it is ok
 cmsgLen :: (Integer) -> (Integer)
 cmsgLen a1 =
@@ -505,14 +569,14 @@ cmsgLen a1 =
   let {res = cmsgLen'_ a1'} in
   let {res' = toInteger res} in
   (res')
-{-# LINE 234 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 273 "System/NanoMsg/C/NanoMsg.chs" #-}
 cmsgLen' :: (Integer) -> IO ((Integer))
 cmsgLen' a1 =
   let {a1' = fromIntegral a1} in 
   cmsgLen''_ a1' >>= \res ->
   let {res' = toInteger res} in
   return (res')
-{-# LINE 235 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 274 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- | might not be pure in the future but given current nanomsg implementation it is ok
 cmsgSpace :: (Integer) -> (Integer)
 cmsgSpace a1 =
@@ -520,14 +584,14 @@ cmsgSpace a1 =
   let {res = cmsgSpace'_ a1'} in
   let {res' = toInteger res} in
   (res')
-{-# LINE 237 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 276 "System/NanoMsg/C/NanoMsg.chs" #-}
 cmsgSpace' :: (Integer) -> IO ((Integer))
 cmsgSpace' a1 =
   let {a1' = fromIntegral a1} in 
   cmsgSpace''_ a1' >>= \res ->
   let {res' = toInteger res} in
   return (res')
-{-# LINE 238 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 277 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 
 newtype NnSocket = NnSocket CInt deriving (Eq, Show)
@@ -540,7 +604,7 @@ nnSocket a1 a2 =
   nnSocket'_ a1' a2' >>= \res ->
   errorFromSocket res >>= \res' ->
   return (res')
-{-# LINE 244 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 283 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 nnClose :: (NnSocket) -> IO ((Maybe NnError))
 nnClose a1 =
@@ -548,7 +612,7 @@ nnClose a1 =
   nnClose'_ a1' >>= \res ->
   errorFromRetCode res >>= \res' ->
   return (res')
-{-# LINE 246 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 285 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 nnSetsockopt :: (AllSocketOptions a, AllLevelOptions b) => (NnSocket) -> (b) -> (a) -> (Ptr ()) -> (Integer) -> IO ((Maybe NnError))
 nnSetsockopt a1 a2 a3 a4 a5 =
@@ -560,24 +624,30 @@ nnSetsockopt a1 a2 a3 a4 a5 =
   nnSetsockopt'_ a1' a2' a3' a4' a5' >>= \res ->
   errorFromRetCode res >>= \res' ->
   return (res')
-{-# LINE 248 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 287 "System/NanoMsg/C/NanoMsg.chs" #-}
 
+withNullPPtr :: (Ptr () -> IO b) -> IO b
+withNullPPtr r = do 
+  pp <- malloc
+  poke pp nullPtr
+  r $ castPtr pp
 withNullPtr :: (Ptr () -> IO b) -> IO b
 withNullPtr r = r nullPtr
 -- | handling of values for options out of c api - we do not allocate memory for return value of option -- and do not send size -- should use a stablepointer?? -- to test thoroughly (doc initiate size and pointer which does not make any sense
-nnGetsockopt :: (AllSocketOptions a, AllLevelOptions b) => (NnSocket) -> (b) -> (a) -> IO ((Maybe NnError), (Ptr ()), (Integer))
-nnGetsockopt a1 a2 a3 =
+--{#fun unsafe nn_getsockopt as ^ `(AllSocketOptions a, AllLevelOptions b)' => {socketToCInt `NnSocket', cIntFromEnum `b', cIntFromEnum `a', withNullPtr- `Ptr ()' id,  alloca- `Integer' peekInteger*} -> `Maybe NnError' errorFromRetCode* #}
+nnGetsockopt :: (AllSocketOptions a, AllLevelOptions b) => (NnSocket) -> (b) -> (a) -> (Ptr ()) -> (Int) -> IO ((Maybe NnError), (Ptr ()), (Int))
+nnGetsockopt a1 a2 a3 a4 a5 =
   let {a1' = socketToCInt a1} in 
   let {a2' = cIntFromEnum a2} in 
   let {a3' = cIntFromEnum a3} in 
-  withNullPtr $ \a4' -> 
-  alloca $ \a5' -> 
+  let {a4' = id a4} in 
+  withPIntegral a5 $ \a5' -> 
   nnGetsockopt'_ a1' a2' a3' a4' a5' >>= \res ->
   errorFromRetCode res >>= \res' ->
   let {a4'' = id  a4'} in 
-  peekInteger  a5'>>= \a5'' -> 
+  peekInt  a5'>>= \a5'' -> 
   return (res', a4'', a5'')
-{-# LINE 253 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 298 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 newtype NnEndPoint = NnEndPoint CInt deriving (Eq, Show)
 endPointToCInt (NnEndPoint s) = s
@@ -589,7 +659,7 @@ nnBind a1 a2 =
   nnBind'_ a1' a2' >>= \res ->
   errorFromEndPoint res >>= \res' ->
   return (res')
-{-# LINE 258 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 303 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 nnConnect :: (NnSocket) -> (String) -> IO ((Either NnError NnEndPoint))
 nnConnect a1 a2 =
@@ -598,7 +668,7 @@ nnConnect a1 a2 =
   nnConnect'_ a1' a2' >>= \res ->
   errorFromEndPoint res >>= \res' ->
   return (res')
-{-# LINE 260 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 305 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 nnShutdown :: (NnSocket) -> (NnEndPoint) -> IO ((Maybe NnError))
 nnShutdown a1 a2 =
@@ -607,112 +677,159 @@ nnShutdown a1 a2 =
   nnShutdown'_ a1' a2' >>= \res ->
   errorFromRetCode res >>= \res' ->
   return (res')
-{-# LINE 262 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 307 "System/NanoMsg/C/NanoMsg.chs" #-}
 
--- | type to send not in C (not even storable)
-nnSend :: (NnSocket) -> (ForeignPtr ()) -> (Integer) -> (SndRcvFlags) -> IO ((Either NnError Integer))
+-- | type to send not in C (not even storable) 
+nnSend :: (NnSocket) -> (ForeignPtr ()) -> (Integer) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
 nnSend a1 a2 a3 a4 =
   let {a1' = socketToCInt a1} in 
   withForeignPtr a2 $ \a2' -> 
   let {a3' = fromIntegral a3} in 
-  let {a4' = cIntFromEnum a4} in 
+  let {a4' = flagsToCInt a4} in 
   nnSend'_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 265 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 310 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- | not ForeignFree
-nnSend' :: (NnSocket) -> (Ptr ()) -> (Integer) -> (SndRcvFlags) -> IO ((Either NnError Integer))
+nnSend' :: (NnSocket) -> (Ptr ()) -> (Integer) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
 nnSend' a1 a2 a3 a4 =
   let {a1' = socketToCInt a1} in 
   let {a2' = id a2} in 
   let {a3' = fromIntegral a3} in 
-  let {a4' = cIntFromEnum a4} in 
+  let {a4' = flagsToCInt a4} in 
   nnSend''_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 267 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 312 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- | no foreign (deallocate is managed by nanomq)
-nnSendDyn :: (NnSocket) -> (Ptr ()) -> (SndRcvFlags) -> IO ((Either NnError Integer))
+nnSendDyn :: (NnSocket) -> (Ptr ()) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
 nnSendDyn a1 a2 a4 =
   let {a1' = socketToCInt a1} in 
-  let {a2' = id a2} in 
+  withPPtr a2 $ \a2' -> 
   withNnMSG $ \a3' -> 
-  let {a4' = cIntFromEnum a4} in 
+  let {a4' = flagsToCInt a4} in 
   nnSendDyn'_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 269 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 314 "System/NanoMsg/C/NanoMsg.chs" #-}
+--{#fun unsafe nn_send as nnSendDyn {socketToCInt `NnSocket', withPForeign* `ForeignPtr ()', withNnMSG- `Integer', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #} -- Do no send with foreing free pointer because nn deallocate
 
 -- TODO fn with foreign does not make too much sense (should be in api)
-nnRecvDyn' :: (NnSocket) -> (SndRcvFlags) -> IO ((Either NnError Integer), (Ptr ()))
+nnRecvDyn' :: (NnSocket) -> ([SndRcvFlags]) -> IO ((Either NnError Integer), (Ptr ()))
 nnRecvDyn' a1 a4 =
   let {a1' = socketToCInt a1} in 
-  withNullPtr $ \a2' -> 
+  withNullPPtr $ \a2' -> 
   withNnMSG $ \a3' -> 
-  let {a4' = cIntFromEnum a4} in 
+  let {a4' = flagsToCInt a4} in 
   nnRecvDyn''_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
-  let {a2'' = id  a2'} in 
+  pVoid  a2'>>= \a2'' -> 
   return (res', a2'')
-{-# LINE 272 "System/NanoMsg/C/NanoMsg.chs" #-}
-nnRecvDyn :: (NnSocket) -> (SndRcvFlags) -> IO ((Either NnError Integer), (ForeignPtr ()))
+{-# LINE 318 "System/NanoMsg/C/NanoMsg.chs" #-}
+nnRecvDyn :: (NnSocket) -> ([SndRcvFlags]) -> IO ((Either NnError Integer), (ForeignPtr ()))
 nnRecvDyn a1 a4 =
   let {a1' = socketToCInt a1} in 
-  withNullPtr $ \a2' -> 
+  withNullPPtr $ \a2' -> 
   withNnMSG $ \a3' -> 
-  let {a4' = cIntFromEnum a4} in 
+  let {a4' = flagsToCInt a4} in 
   nnRecvDyn'_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
-  foreignVoid  a2'>>= \a2'' -> 
+  foreignPMsg  a2'>>= \a2'' -> 
   return (res', a2'')
-{-# LINE 273 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 319 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 -- TODO fn with foreign does not make too much sense (should be in api)
-nnRecv :: (NnSocket) -> (ForeignPtr ()) -> (Integer) -> (SndRcvFlags) -> IO ((Either NnError Integer))
+nnRecv :: (NnSocket) -> (ForeignPtr ()) -> (Integer) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
 nnRecv a1 a2 a3 a4 =
   let {a1' = socketToCInt a1} in 
   withForeignPtr a2 $ \a2' -> 
   let {a3' = fromIntegral a3} in 
-  let {a4' = cIntFromEnum a4} in 
+  let {a4' = flagsToCInt a4} in 
   nnRecv'_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 276 "System/NanoMsg/C/NanoMsg.chs" #-}
-nnRecv' :: (NnSocket) -> (Ptr ()) -> (Integer) -> (SndRcvFlags) -> IO ((Either NnError Integer))
+{-# LINE 322 "System/NanoMsg/C/NanoMsg.chs" #-}
+nnRecv' :: (NnSocket) -> (Ptr ()) -> (Integer) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
 nnRecv' a1 a2 a3 a4 =
   let {a1' = socketToCInt a1} in 
   let {a2' = id a2} in 
   let {a3' = fromIntegral a3} in 
-  let {a4' = cIntFromEnum a4} in 
+  let {a4' = flagsToCInt a4} in 
   nnRecv''_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 277 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 323 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 
-nnSendmsg :: (NnSocket) -> (NnFMsghdr) -> (SndRcvFlags) -> IO ((Either NnError Integer))
-nnSendmsg a1 a2 a3 =
+nnSendmsg2 :: (NnSocket) -> (NnFMsghdr) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
+nnSendmsg2 a1 a2 a3 =
   let {a1' = socketToCInt a1} in 
   withFmsghdr a2 $ \a2' -> 
-  let {a3' = cIntFromEnum a3} in 
+  let {a3' = flagsToCInt a3} in 
+  nnSendmsg2'_ a1' a2' a3' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+{-# LINE 326 "System/NanoMsg/C/NanoMsg.chs" #-}
+nnSendmsg2' :: (NnSocket) -> (NnMsghdr) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
+nnSendmsg2' a1 a2 a3 =
+  let {a1' = socketToCInt a1} in 
+  let {a2' = fromMsghdr a2} in 
+  let {a3' = flagsToCInt a3} in 
+  nnSendmsg2''_ a1' a2' a3' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+{-# LINE 327 "System/NanoMsg/C/NanoMsg.chs" #-}
+nnSendmsg :: (NnSocket) -> (NNMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
+nnSendmsg a1 a2 a3 =
+  let {a1' = socketToCInt a1} in 
+  fromMsgHdr a2 $ \a2' -> 
+  let {a3' = flagsToCInt a3} in 
   nnSendmsg'_ a1' a2' a3' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 280 "System/NanoMsg/C/NanoMsg.chs" #-}
-nnSendmsg' :: (NnSocket) -> (NnMsghdr) -> (SndRcvFlags) -> IO ((Either NnError Integer))
-nnSendmsg' a1 a2 a3 =
+{-# LINE 328 "System/NanoMsg/C/NanoMsg.chs" #-}
+
+nnRecvmsg :: (NnSocket) -> (NNMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
+nnRecvmsg a1 a2 a3 =
   let {a1' = socketToCInt a1} in 
-  let {a2' = fromMsghdr a2} in 
-  let {a3' = cIntFromEnum a3} in 
-  nnSendmsg''_ a1' a2' a3' >>= \res ->
+  fromMsgHdr a2 $ \a2' -> 
+  let {a3' = flagsToCInt a3} in 
+  nnRecvmsg'_ a1' a2' a3' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 281 "System/NanoMsg/C/NanoMsg.chs" #-}
-
+{-# LINE 330 "System/NanoMsg/C/NanoMsg.chs" #-}
+nnRecvmsg2 :: (NnSocket) -> (NnFMsghdr) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
+nnRecvmsg2 a1 a2 a3 =
+  let {a1' = socketToCInt a1} in 
+  withFmsghdr a2 $ \a2' -> 
+  let {a3' = flagsToCInt a3} in 
+  nnRecvmsg2'_ a1' a2' a3' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+{-# LINE 331 "System/NanoMsg/C/NanoMsg.chs" #-}
+nnRecvmsg2' :: (NnSocket) -> (NnMsghdr) -> ([SndRcvFlags]) -> IO ((Either NnError Integer))
+nnRecvmsg2' a1 a2 a3 =
+  let {a1' = socketToCInt a1} in 
+  let {a2' = fromMsghdr a2} in 
+  let {a3' = flagsToCInt a3} in 
+  nnRecvmsg2''_ a1' a2' a3' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+{-# LINE 332 "System/NanoMsg/C/NanoMsg.chs" #-}
 --withFmsghdr :: NnFMsghdr -> Ptr()
 withFmsghdr f r =  withForeignPtr f (r . castPtr)
 -- | Warning value of constant NN_MSG is hardcoded to (-1). Due to restriction on cast with c2hs. TODO use #const in a separate hs2c file or use inline macro to cast to an int (dirty).
-withNnMSG a = a (-1)
+withNnMSG a = a (fromIntegral nN_MSG)
+
+-- | TODO api with fork (with correct mask) + socket type incompatibilities?
+nnDevice :: (NnSocket) -> (NnSocket) -> IO ((Maybe NnError))
+nnDevice a1 a2 =
+  let {a1' = socketToCInt a1} in 
+  let {a2' = socketToCInt a2} in 
+  nnDevice'_ a1' a2' >>= \res ->
+  errorFromRetCode res >>= \res' ->
+  return (res')
+{-# LINE 339 "System/NanoMsg/C/NanoMsg.chs" #-}
 {- 
 * struct nn_cmsghdr *NN_CMSG_FIRSTHDR(struct nn_msghdr *hdr);
 NN_CMSG_FIRSTHDR returns a pointer to the first nn_cmsghdr in the control buffer in the supplied nn_msghdr structure. => in struct length level and type -> generic enum other level and type
@@ -736,24 +853,31 @@ TODO single message send fn with allocmsg usage, and strcpy of bytestring? like 
 -- | Struct related Code for simplicity and to avoid boilerplate code, this could be refactor in a separate hs2c module with usage of data, or moved in c helper functions.
 -- use freeForeignPointer or explicit pointer (with manual free)
 type NnFIovec = ForeignPtr (NnIovec)
-{-# LINE 309 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 362 "System/NanoMsg/C/NanoMsg.chs" #-}
 type NnFMsghdr = ForeignPtr (NnMsghdr)
-{-# LINE 310 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 363 "System/NanoMsg/C/NanoMsg.chs" #-}
 type NnFCmsghdr = ForeignPtr (NnCmsghdr)
-{-# LINE 311 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 364 "System/NanoMsg/C/NanoMsg.chs" #-}
 newtype NnIovec = NnIovec (Ptr (NnIovec))
-{-# LINE 312 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 365 "System/NanoMsg/C/NanoMsg.chs" #-}
 newtype NnMsghdr = NnMsghdr (Ptr (NnMsghdr))
-{-# LINE 313 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 366 "System/NanoMsg/C/NanoMsg.chs" #-}
 newtype NnCmsghdr = NnCmsghdr (Ptr (NnCmsghdr))
-{-# LINE 314 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 367 "System/NanoMsg/C/NanoMsg.chs" #-}
 fromMsghdr  (NnMsghdr m)   = castPtr m
+fromMsgHdr ::  NNMsgHdr -> (Ptr () -> IO b)  -> IO b
+fromMsgHdr  = withPStorable'
 fromCmsghdr  (NnCmsghdr m) = castPtr m
+fromCMsgHdr ::  NNCMsgHdr -> (Ptr () -> IO b)  -> IO b
+fromCMsgHdr  = withPStorable'
 fromFIovec  (NnIovec v)   = castPtr v
 toMsghdr  = NnMsghdr . castPtr
 toCmsghdr = NnCmsghdr . castPtr
+toCMsgHdr :: Ptr () -> IO NNCMsgHdr
+toCMsgHdr = peek . castPtr
 toFIovec  = NnIovec . castPtr
 maybeCmsg m = if m == nullPtr then Nothing else (Just . toCmsghdr) m 
+maybeCMsg m = if m == nullPtr then return Nothing else toCMsgHdr m >>= (return . Just)
 
 -- TODO Inline all getter and setter
 -- TODO instance show and reverse of show for those struct
@@ -764,7 +888,7 @@ iovecGetBase' (NnIovec v) = (\ptr -> do {peekByteOff ptr 0 ::IO (Ptr ())}) v
 iovecGetBase :: NnFIovec -> IO(Ptr())
 iovecGetBase = (`withForeignPtr` (\ptr -> do {peekByteOff ptr 0 ::IO (Ptr ())}))
 iovecGetLen'' = (liftM toInteger) . (\ptr -> do {peekByteOff ptr 8 ::IO CULong})
-{-# LINE 331 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 391 "System/NanoMsg/C/NanoMsg.chs" #-}
 iovecGetLen' :: NnIovec -> IO(Integer)
 iovecGetLen' (NnIovec v) = iovecGetLen'' v
 iovecGetLen :: NnFIovec -> IO(Integer)
@@ -793,7 +917,7 @@ msghdrSetIov :: NnFMsghdr -> NnFIovec -> IO()
 msghdrSetIov h v = withForeignPtr h (\h' -> withForeignPtr v (\v' -> msghdrSetIov'' h' v'))
 
 msghdrGetiovlen'' = (liftM fromIntegral) . (\ptr -> do {peekByteOff ptr 8 ::IO CInt})
-{-# LINE 359 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 419 "System/NanoMsg/C/NanoMsg.chs" #-}
 msghdrGetiovlen' :: NnMsghdr -> IO(Int)
 msghdrGetiovlen' (NnMsghdr v) = msghdrGetiovlen'' v
 msghdrGetiovlen :: NnFMsghdr -> IO(Int)
@@ -805,7 +929,7 @@ msghdrSetiovlen ::  NnFMsghdr -> Int -> IO()
 msghdrSetiovlen h v = withForeignPtr h (`msghdrSetiovlen''` v)
 
 msghdrGetcontrol'' = (\ptr -> do {peekByteOff ptr 16 ::IO (Ptr ())})
-{-# LINE 370 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 430 "System/NanoMsg/C/NanoMsg.chs" #-}
 msghdrGetcontrol' :: NnMsghdr -> IO(Ptr())
 msghdrGetcontrol' (NnMsghdr v) = msghdrGetcontrol'' v
 msghdrGetcontrol :: NnFMsghdr -> IO(Ptr())
@@ -817,7 +941,7 @@ msghdrSetcontrol ::  NnFMsghdr -> Ptr() -> IO()
 msghdrSetcontrol h v = withForeignPtr h (`msghdrSetcontrol''` v)
 
 msghdrGetcontrollen'' = (liftM toInteger) . (\ptr -> do {peekByteOff ptr 24 ::IO CULong})
-{-# LINE 381 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 441 "System/NanoMsg/C/NanoMsg.chs" #-}
 msghdrGetcontrollen' :: NnMsghdr -> IO(Integer)
 msghdrGetcontrollen' (NnMsghdr v) = msghdrGetcontrollen'' v
 msghdrGetcontrollen :: NnFMsghdr -> IO(Integer)
@@ -829,7 +953,7 @@ msghdrSetcontrollen ::  NnFMsghdr -> Integer -> IO()
 msghdrSetcontrollen h v = withForeignPtr h (`msghdrSetcontrollen''` v)
 
 cmsghdrGetlen'' = (liftM toInteger) . (\ptr -> do {peekByteOff ptr 0 ::IO CULong})
-{-# LINE 392 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 452 "System/NanoMsg/C/NanoMsg.chs" #-}
 cmsghdrGetlen' :: NnMsghdr -> IO(Integer)
 cmsghdrGetlen' (NnMsghdr v) = cmsghdrGetlen'' v
 cmsghdrGetlen :: NnFMsghdr -> IO(Integer)
@@ -842,7 +966,7 @@ cmsghdrSetlen h v = withForeignPtr h (`cmsghdrSetlen''` v)
 
 
 cmsghdrGetlevel'' = (liftM fromIntegral) . (\ptr -> do {peekByteOff ptr 8 ::IO CInt})
-{-# LINE 404 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 464 "System/NanoMsg/C/NanoMsg.chs" #-}
 cmsghdrGetlevel' :: NnMsghdr -> IO(Int)
 cmsghdrGetlevel' (NnMsghdr v) = cmsghdrGetlevel'' v
 cmsghdrGetlevel :: NnFMsghdr -> IO(Int)
@@ -854,7 +978,7 @@ cmsghdrSetlevel ::  NnFMsghdr -> Int -> IO()
 cmsghdrSetlevel h v = withForeignPtr h (`cmsghdrSetlevel''` v)
 
 cmsghdrGettype'' = (liftM fromIntegral) . (\ptr -> do {peekByteOff ptr 12 ::IO CInt})
-{-# LINE 415 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 475 "System/NanoMsg/C/NanoMsg.chs" #-}
 cmsghdrGettype' :: NnMsghdr -> IO(Int)
 cmsghdrGettype' (NnMsghdr v) = cmsghdrGettype'' v
 cmsghdrGettype :: NnFMsghdr -> IO(Int)
@@ -867,18 +991,21 @@ cmsghdrSettype h v = withForeignPtr h (`cmsghdrSettype''` v)
 
 
 -- TODO add align
-newNnIovec = mallocBytes $ sizeOf (undefined::Ptr a) + 8
-{-# LINE 428 "System/NanoMsg/C/NanoMsg.chs" #-}
-newNnMsghdr = mallocBytes $ 2 * sizeOf (undefined::Ptr a) + sizeOf (undefined::CInt) + 8
-{-# LINE 429 "System/NanoMsg/C/NanoMsg.chs" #-}
-newNnCmsghdr = mallocBytes $ 2 * sizeOf (undefined::CInt) + 8
-{-# LINE 430 "System/NanoMsg/C/NanoMsg.chs" #-}
+newNnIovec :: IO NnIovec
+newNnIovec = mallocBytes ( sizeOf (undefined::Ptr a) + 8 ) >>= (return . NnIovec . castPtr)
+freeNnIovec (NnIovec v) = free v
+newNnCmsghdr :: IO NnCmsghdr
+newNnCmsghdr = mallocBytes ( 2 * sizeOf (undefined::CInt) + 8) >>= (return . NnCmsghdr . castPtr)
+freeNnCmsghdr (NnCmsghdr h) = free h
+newNnMsghdr :: IO NnMsghdr
+newNnMsghdr = mallocBytes ( 2 * sizeOf (undefined::Ptr a) + sizeOf (undefined::CInt) + 8) >>= (return . NnMsghdr . castPtr)
+freeNnMsghdr (NnMsghdr h) = free h
 newFNnIovec = mallocForeignPtrBytes $ sizeOf (undefined::Ptr a) + 8
-{-# LINE 431 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 497 "System/NanoMsg/C/NanoMsg.chs" #-}
 newFNnMsghdr = mallocForeignPtrBytes $ 2 * sizeOf (undefined::Ptr a) + sizeOf (undefined::CInt) + 8
-{-# LINE 432 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 498 "System/NanoMsg/C/NanoMsg.chs" #-}
 newFNnCmsghdr = mallocForeignPtrBytes $ 2 * sizeOf (undefined::CInt) + 8
-{-# LINE 433 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 499 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 
 
@@ -905,13 +1032,25 @@ foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_freemsg"
   nnFreemsg'_ :: ((Ptr ()) -> (IO CInt))
 
 foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h wfirsthdr"
-  cmsgFirsthdr'_ :: ((Ptr ()) -> (IO (Ptr ())))
+  cmsgFirsthdr2'_ :: ((Ptr ()) -> (IO (Ptr ())))
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h wfirsthdr"
+  cmsgFirstHdr'_ :: ((Ptr ()) -> (IO (Ptr ())))
 
 foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h wnxthdr"
-  cmsgNxthdr'_ :: ((Ptr ()) -> ((Ptr ()) -> (IO (Ptr ()))))
+  cmsgNxthdr2'_ :: ((Ptr ()) -> ((Ptr ()) -> (IO (Ptr ()))))
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h wnxthdr"
+  cmsgNxtHdr'_ :: ((Ptr ()) -> ((Ptr ()) -> (IO (Ptr ()))))
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h wdata"
+  cmsgData2'_ :: ((Ptr ()) -> (IO (Ptr CUChar)))
 
 foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h wdata"
   cmsgData'_ :: ((Ptr ()) -> (IO (Ptr CUChar)))
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h wdata"
+  cmsgData2''_ :: ((Ptr ()) -> (IO (Ptr CUChar)))
 
 foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h wdata"
   cmsgData''_ :: ((Ptr ()) -> (IO (Ptr CUChar)))
@@ -949,29 +1088,44 @@ foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_connect"
 foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_shutdown"
   nnShutdown'_ :: (CInt -> (CInt -> (IO CInt)))
 
-foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_send"
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_send"
   nnSend'_ :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
 
-foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_send"
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_send"
   nnSend''_ :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
 
-foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_send"
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_send"
   nnSendDyn'_ :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
 
-foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
   nnRecvDyn''_ :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
 
-foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
   nnRecvDyn'_ :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
 
-foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
   nnRecv'_ :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
 
-foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
   nnRecv''_ :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_sendmsg"
+  nnSendmsg2'_ :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_sendmsg"
+  nnSendmsg2''_ :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
 
 foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_sendmsg"
   nnSendmsg'_ :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
 
-foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_sendmsg"
-  nnSendmsg''_ :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_recvmsg"
+  nnRecvmsg'_ :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
+
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_recvmsg"
+  nnRecvmsg2'_ :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
+
+foreign import ccall safe "System/NanoMsg/C/NanoMsg.chs.h nn_recvmsg"
+  nnRecvmsg2''_ :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_device"
+  nnDevice'_ :: (CInt -> (CInt -> (IO CInt)))

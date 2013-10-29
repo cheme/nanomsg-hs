@@ -1,5 +1,5 @@
 all:
-	c2hs System/NanoMsg/C/NanoMsg.chs ; ghc -lnanomsg -threaded -package-db=.cabal-sandbox/x86_64-linux-ghc-7.6.3-packages.conf.d/ --make  ./main.hs ./System/NanoMsg/C/inlinemacro.c 
+	hsc2hs System/NanoMsg/C/NanoMsgStruct.hsc ; c2hs System/NanoMsg/C/NanoMsg.chs ; ghc -threaded -lnanomsg -package-db=.cabal-sandbox/x86_64-linux-ghc-7.6.3-packages.conf.d/ --make  ./main.hs ./System/NanoMsg/C/inlinemacro.c 
 tests:
 	ghc -lnanomsg -threaded -package-db=.cabal-sandbox/x86_64-linux-ghc-7.6.3-packages.conf.d/ --make  ./tests.hs
 clean:
