@@ -29,7 +29,7 @@ import qualified Data.List as L
 #include "nanomsg/ipc.h"
 #include "inlinemacro.h"
 
--- TODO change all size_t to Int (currently Integer)
+-- TODO change all size_t to Int (currently Int)
 
 -- #include "nanomsg/transport.h"
 -- #include "nanomsg/protocol.h"
@@ -178,8 +178,6 @@ cIntFromEnum = fromIntegral . fromEnum
 peekInt :: (Storable a, Integral a) => Ptr a -> IO Int
 peekInt = (liftM fromIntegral) . peek
 
-peekInteger :: (Storable a, Integral a) => Ptr a -> IO Integer
-peekInteger = (liftM toInteger) . peek
 -- TODO inline
 withPStorable :: (Storable a) => a -> (Ptr a -> IO b)  -> IO b
 withPStorable i r = alloca (\p -> poke p i >> r p) 
@@ -230,8 +228,8 @@ errorFromNewPointer :: Ptr () -> IO(Either NnError (Ptr ()))
 errorFromNewPointer ptr = if ptr == nullPtr then nnErrno >>= return . Left else return $ Right ptr
 
 
-errorFromLength :: CInt -> IO(Either NnError Integer)
-errorFromLength r = if r < 0 then nnErrno >>= return . Left else (return . Right . toInteger) r
+errorFromLength :: CInt -> IO(Either NnError Int)
+errorFromLength r = if r < 0 then nnErrno >>= return . Left else (return . Right . fromIntegral) r
 
 errorFromSocket :: CInt -> IO(Either NnError NnSocket)
 errorFromSocket r = if r < 0 then nnErrno >>= return . Left else (return . Right . NnSocket) r
@@ -249,8 +247,8 @@ errorFromEndPoint r = if r < 0 then nnErrno >>= return . Left else (return . Rig
 dummy' = {#call unsafe nn_term as ^ #}
 
 -- type of allocation is transport dependant -- see transport implementation --> for haskell api link it to the transport used -- TODO (tricky??)
-{#fun unsafe nn_allocmsg as nnAllocmsg' { fromIntegral `Integer', fromIntegral `Int'} -> `Either NnError (ForeignPtr ())' foreignFreeMsg* #}
-{#fun unsafe nn_allocmsg as ^ { fromIntegral `Integer', fromIntegral `Int'} -> `Either NnError (Ptr ())' errorFromNewPointer* #}
+{#fun unsafe nn_allocmsg as nnAllocmsg' { fromIntegral `Int', fromIntegral `Int'} -> `Either NnError (ForeignPtr ())' foreignFreeMsg* #}
+{#fun unsafe nn_allocmsg as ^ { fromIntegral `Int', fromIntegral `Int'} -> `Either NnError (Ptr ())' errorFromNewPointer* #}
 
 -- do not use if nnAllocmsg' used
 {#fun unsafe nn_freemsg as ^ {id `Ptr ()'} -> `Maybe NnError' errorFromRetCode* #}
@@ -259,22 +257,18 @@ dummy' = {#call unsafe nn_term as ^ #}
 foreign import ccall "System/NanoMsg/C/NanoMsg.chs.h &nn_freemsg"
    nnFunPtrFreeMsg :: FunPtr (Ptr () -> IO ())
 
-{#fun unsafe wfirsthdr as cmsgFirsthdr2 {fromMsghdr `NnMsghdr'} -> `NnCmsghdr' toCmsghdr#}
 {#fun unsafe wfirsthdr as cmsgFirstHdr {fromMsgHdr* `NNMsgHdr'} -> `Maybe NNCMsgHdr' maybeCMsg*#}
-{#fun unsafe wnxthdr as cmsgNxthdr2 {fromMsghdr `NnMsghdr', fromCmsghdr `NnCmsghdr'} -> `Maybe NnCmsghdr' maybeCmsg #}
 {#fun unsafe wnxthdr as cmsgNxtHdr {fromMsgHdr* `NNMsgHdr', fromCMsgHdr* `NNCMsgHdr'} -> `Maybe NNCMsgHdr' maybeCMsg* #}
 -- | use of byteString for char * here. Note that Bytestring is copied. -- not we use unsigned char and do a cast ptr : ByteString should not be use with unicode.
-{#fun unsafe wdata as cmsgData2 {fromCmsghdr `NnCmsghdr'} -> `ByteString' ucPackCString* #}
 {#fun unsafe wdata as cmsgData {fromCMsgHdr* `NNCMsgHdr'} -> `ByteString' ucPackCString* #}
 -- | unsafe version for efficiency. To test but might be ok.
-{#fun unsafe wdata as cmsgData2' {fromCmsghdr `NnCmsghdr'} -> `ByteString' uuPackCString* #}
 {#fun unsafe wdata as cmsgData' {fromCMsgHdr* `NNCMsgHdr'} -> `ByteString' uuPackCString* #}
 -- | might not be pure in the future but given current nanomsg implementation it is ok
-{#fun pure wlen as cmsgLen { fromIntegral `Integer'} -> `Integer' toInteger #}
-{#fun unsafe wlen as cmsgLen' { fromIntegral `Integer'} -> `Integer' toInteger #}
+{#fun pure wlen as cmsgLen { fromIntegral `Int'} -> `Int' fromIntegral #}
+{#fun unsafe wlen as cmsgLen' { fromIntegral `Int'} -> `Int' fromIntegral #}
 -- | might not be pure in the future but given current nanomsg implementation it is ok
-{#fun pure wspace as cmsgSpace { fromIntegral `Integer'} -> `Integer' toInteger #}
-{#fun unsafe wspace as cmsgSpace' { fromIntegral `Integer'} -> `Integer' toInteger #}
+{#fun pure wspace as cmsgSpace { fromIntegral `Int'} -> `Int' fromIntegral #}
+{#fun unsafe wspace as cmsgSpace' { fromIntegral `Int'} -> `Int' fromIntegral #}
 
 
 newtype NnSocket = NnSocket CInt deriving (Eq, Show)
@@ -284,7 +278,7 @@ socketToCInt (NnSocket s) = s
 
 {#fun unsafe nn_close as ^ {socketToCInt `NnSocket'} -> `Maybe NnError' errorFromRetCode* #}
 
-{#fun unsafe nn_setsockopt as ^ `(AllSocketOptions a, AllLevelOptions b)' => {socketToCInt `NnSocket', cIntFromEnum `b', cIntFromEnum `a', id `Ptr ()', fromIntegral `Integer'} -> `Maybe NnError' errorFromRetCode* #}
+{#fun unsafe nn_setsockopt as ^ `(AllSocketOptions a, AllLevelOptions b)' => {socketToCInt `NnSocket', cIntFromEnum `b', cIntFromEnum `a', id `Ptr ()', fromIntegral `Int'} -> `Maybe NnError' errorFromRetCode* #}
 
 withNullPPtr :: (Ptr () -> IO b) -> IO b
 withNullPPtr r = do 
@@ -294,7 +288,7 @@ withNullPPtr r = do
 withNullPtr :: (Ptr () -> IO b) -> IO b
 withNullPtr r = r nullPtr
 -- | handling of values for options out of c api - we do not allocate memory for return value of option -- and do not send size -- should use a stablepointer?? -- to test thoroughly (doc initiate size and pointer which does not make any sense
---{#fun unsafe nn_getsockopt as ^ `(AllSocketOptions a, AllLevelOptions b)' => {socketToCInt `NnSocket', cIntFromEnum `b', cIntFromEnum `a', withNullPtr- `Ptr ()' id,  alloca- `Integer' peekInteger*} -> `Maybe NnError' errorFromRetCode* #}
+--{#fun unsafe nn_getsockopt as ^ `(AllSocketOptions a, AllLevelOptions b)' => {socketToCInt `NnSocket', cIntFromEnum `b', cIntFromEnum `a', withNullPtr- `Ptr ()' id,  alloca- `Int' peekInt*} -> `Maybe NnError' errorFromRetCode* #}
 {#fun unsafe nn_getsockopt as ^ `(AllSocketOptions a, AllLevelOptions b)' => {socketToCInt `NnSocket', cIntFromEnum `b', cIntFromEnum `a', id `Ptr ()' id, withPIntegral* `Int' peekInt*} -> `Maybe NnError' errorFromRetCode* #}
 
 newtype NnEndPoint = NnEndPoint CInt deriving (Eq, Show)
@@ -307,29 +301,25 @@ endPointToCInt (NnEndPoint s) = s
 {#fun unsafe nn_shutdown as ^ {socketToCInt `NnSocket', endPointToCInt `NnEndPoint'} -> `Maybe NnError' errorFromRetCode* #}
 
 -- | type to send not in C (not even storable) 
-{#fun  nn_send as ^ {socketToCInt `NnSocket', withForeignPtr* `ForeignPtr ()', fromIntegral `Integer', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
+{#fun  nn_send as ^ {socketToCInt `NnSocket', withForeignPtr* `ForeignPtr ()', fromIntegral `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 -- | not ForeignFree
-{#fun  nn_send as nnSend' {socketToCInt `NnSocket', id `Ptr ()', fromIntegral `Integer',flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
+{#fun  nn_send as nnSend' {socketToCInt `NnSocket', id `Ptr ()', fromIntegral `Int',flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 -- | no foreign (deallocate is managed by nanomq)
-{#fun  nn_send as nnSendDyn {socketToCInt `NnSocket', withPPtr* `Ptr ()', withNnMSG- `Integer', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
---{#fun unsafe nn_send as nnSendDyn {socketToCInt `NnSocket', withPForeign* `ForeignPtr ()', withNnMSG- `Integer', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #} -- Do no send with foreing free pointer because nn deallocate
+{#fun  nn_send as nnSendDyn {socketToCInt `NnSocket', withPPtr* `Ptr ()', withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+--{#fun unsafe nn_send as nnSendDyn {socketToCInt `NnSocket', withPForeign* `ForeignPtr ()', withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #} -- Do no send with foreing free pointer because nn deallocate
 
 -- TODO fn with foreign does not make too much sense (should be in api)
-{#fun nn_recv as nnRecvDyn' {socketToCInt `NnSocket', withNullPPtr- `Ptr ()' pVoid*,  withNnMSG- `Integer', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
-{#fun  nn_recv as nnRecvDyn {socketToCInt `NnSocket', withNullPPtr- `ForeignPtr ()' foreignPMsg*,  withNnMSG- `Integer', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
+{#fun nn_recv as nnRecvDyn' {socketToCInt `NnSocket', withNullPPtr- `Ptr ()' pVoid*,  withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun  nn_recv as nnRecvDyn {socketToCInt `NnSocket', withNullPPtr- `ForeignPtr ()' foreignPMsg*,  withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 
 -- TODO fn with foreign does not make too much sense (should be in api)
-{#fun  nn_recv as ^ {socketToCInt `NnSocket', withForeignPtr* `ForeignPtr ()', fromIntegral `Integer', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
-{#fun  nn_recv as nnRecv' {socketToCInt `NnSocket', id `Ptr ()', fromIntegral `Integer', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
+{#fun  nn_recv as ^ {socketToCInt `NnSocket', withForeignPtr* `ForeignPtr ()', fromIntegral `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun  nn_recv as nnRecv' {socketToCInt `NnSocket', id `Ptr ()', fromIntegral `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 
 
-{#fun unsafe nn_sendmsg as nnSendmsg2 {socketToCInt `NnSocket', withFmsghdr* `NnFMsghdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
-{#fun unsafe nn_sendmsg as nnSendmsg2' {socketToCInt `NnSocket', fromMsghdr `NnMsghdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
-{#fun unsafe nn_sendmsg as ^ {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
+{#fun unsafe nn_sendmsg as ^ {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 
-{#fun nn_recvmsg as ^ {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
-{#fun nn_recvmsg as nnRecvmsg2 {socketToCInt `NnSocket', withFmsghdr* `NnFMsghdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
-{#fun nn_recvmsg as nnRecvmsg2' {socketToCInt `NnSocket', fromMsghdr `NnMsghdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Integer' errorFromLength* #}
+{#fun nn_recvmsg as ^ {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 --withFmsghdr :: NnFMsghdr -> Ptr()
 withFmsghdr f r =  withForeignPtr f (r . castPtr)
 -- | Warning value of constant NN_MSG is hardcoded to (-1). Due to restriction on cast with c2hs. TODO use #const in a separate hs2c file or use inline macro to cast to an int (dirty).
@@ -358,145 +348,12 @@ TODO single message send fn with allocmsg usage, and strcpy of bytestring? like 
 
 
 -- | Struct related Code for simplicity and to avoid boilerplate code, this could be refactor in a separate hs2c module with usage of data, or moved in c helper functions.
--- use freeForeignPointer or explicit pointer (with manual free)
-{#pointer * nn_iovec as NnFIovec foreign -> NnIovec #}
-{#pointer * nn_msghdr as NnFMsghdr foreign -> NnMsghdr #}
-{#pointer * nn_cmsghdr as NnFCmsghdr foreign -> NnCmsghdr #}
-{#pointer * nn_iovec as NnIovec newtype #}
-{#pointer * nn_msghdr as NnMsghdr newtype #}
-{#pointer * nn_cmsghdr as NnCmsghdr newtype #}
-fromMsghdr  (NnMsghdr m)   = castPtr m
 fromMsgHdr ::  NNMsgHdr -> (Ptr () -> IO b)  -> IO b
 fromMsgHdr  = withPStorable'
-fromCmsghdr  (NnCmsghdr m) = castPtr m
 fromCMsgHdr ::  NNCMsgHdr -> (Ptr () -> IO b)  -> IO b
 fromCMsgHdr  = withPStorable'
-fromFIovec  (NnIovec v)   = castPtr v
-toMsghdr  = NnMsghdr . castPtr
-toCmsghdr = NnCmsghdr . castPtr
 toCMsgHdr :: Ptr () -> IO NNCMsgHdr
 toCMsgHdr = peek . castPtr
-toFIovec  = NnIovec . castPtr
-maybeCmsg m = if m == nullPtr then Nothing else (Just . toCmsghdr) m 
 maybeCMsg m = if m == nullPtr then return Nothing else toCMsgHdr m >>= (return . Just)
-
--- TODO Inline all getter and setter
--- TODO instance show and reverse of show for those struct
--- Terrible boilerplate code -- avoid data usage for struct 
--- Performance related it may be nicer to create c helper functions (we already got a wrapper for macro). (for getter or to implement usecase where those setter - getter are relevant).
-iovecGetBase' :: NnIovec -> IO(Ptr())
-iovecGetBase' (NnIovec v) = {#get nn_iovec.iov_base#} v
-iovecGetBase :: NnFIovec -> IO(Ptr())
-iovecGetBase = (`withForeignPtr` {#get nn_iovec.iov_base#})
-iovecGetLen'' = (liftM toInteger) . {#get nn_iovec.iov_len#}
-iovecGetLen' :: NnIovec -> IO(Integer)
-iovecGetLen' (NnIovec v) = iovecGetLen'' v
-iovecGetLen :: NnFIovec -> IO(Integer)
-iovecGetLen = (`withForeignPtr` iovecGetLen'')
-iovecSetLen'' v l = {#set nn_iovec.iov_len#} v (fromInteger l)
-iovecSetLen' :: NnIovec -> Integer -> IO()
-iovecSetLen' (NnIovec v) l = iovecSetLen'' v l
-iovecSetLen :: NnFIovec -> Integer -> IO()
-iovecSetLen p l = withForeignPtr p (`iovecSetLen''` l)
-iovecSetBase'' v l = {#set nn_iovec.iov_base#} v l
-iovecSetBase' :: NnIovec -> Ptr() -> IO()
-iovecSetBase' (NnIovec v) l = iovecSetBase'' v l
-iovecSetBase :: NnFIovec -> Ptr() -> IO()
-iovecSetBase p l = withForeignPtr p (`iovecSetBase''` l)
-
---msghdrGetIov :: NnFMsghdr -> IO(NnFIovec)
-msghdrGetIov'' mh = (\ptr -> do {peekByteOff ptr 0 :: IO(Ptr a)}) mh
-msghdrGetIov' :: NnMsghdr -> IO(NnIovec)
-msghdrGetIov' (NnMsghdr mh)= liftM NnIovec (msghdrGetIov'' mh)
-msghdrGetIov :: NnFMsghdr -> IO(NnFIovec)
-msghdrGetIov a = withForeignPtr a msghdrGetIov'' >>= foreignFree
-msghdrSetIov'' v l = (\ptr val -> do {pokeByteOff ptr 0 (val::(Ptr NnIovec))}) v l
-msghdrSetIov' :: NnMsghdr -> NnIovec -> IO()
-msghdrSetIov' (NnMsghdr h) (NnIovec v) = msghdrSetIov'' h v
-msghdrSetIov :: NnFMsghdr -> NnFIovec -> IO()
-msghdrSetIov h v = withForeignPtr h (\h' -> withForeignPtr v (\v' -> msghdrSetIov'' h' v'))
-
-msghdrGetiovlen'' = (liftM fromIntegral) . {#get nn_msghdr.msg_iovlen#}
-msghdrGetiovlen' :: NnMsghdr -> IO(Int)
-msghdrGetiovlen' (NnMsghdr v) = msghdrGetiovlen'' v
-msghdrGetiovlen :: NnFMsghdr -> IO(Int)
-msghdrGetiovlen = (`withForeignPtr` msghdrGetiovlen'')
-msghdrSetiovlen'' v l = {#set nn_msghdr.msg_iovlen#} v (fromIntegral l)
-msghdrSetiovlen' :: NnMsghdr -> Int -> IO()
-msghdrSetiovlen' (NnMsghdr h) l = msghdrSetiovlen'' h l
-msghdrSetiovlen ::  NnFMsghdr -> Int -> IO()
-msghdrSetiovlen h v = withForeignPtr h (`msghdrSetiovlen''` v)
-
-msghdrGetcontrol'' = {#get nn_msghdr.msg_control#}
-msghdrGetcontrol' :: NnMsghdr -> IO(Ptr())
-msghdrGetcontrol' (NnMsghdr v) = msghdrGetcontrol'' v
-msghdrGetcontrol :: NnFMsghdr -> IO(Ptr())
-msghdrGetcontrol = (`withForeignPtr` msghdrGetcontrol'')
-msghdrSetcontrol'' v l = {#set nn_msghdr.msg_control#} v l
-msghdrSetcontrol' :: NnMsghdr -> Ptr() -> IO()
-msghdrSetcontrol' (NnMsghdr h) l = msghdrSetcontrol'' h l
-msghdrSetcontrol ::  NnFMsghdr -> Ptr() -> IO()
-msghdrSetcontrol h v = withForeignPtr h (`msghdrSetcontrol''` v)
-
-msghdrGetcontrollen'' = (liftM toInteger) . {#get nn_msghdr.msg_controllen#}
-msghdrGetcontrollen' :: NnMsghdr -> IO(Integer)
-msghdrGetcontrollen' (NnMsghdr v) = msghdrGetcontrollen'' v
-msghdrGetcontrollen :: NnFMsghdr -> IO(Integer)
-msghdrGetcontrollen = (`withForeignPtr` msghdrGetcontrollen'')
-msghdrSetcontrollen'' v l = {#set nn_msghdr.msg_controllen#} v (fromInteger l)
-msghdrSetcontrollen' :: NnMsghdr -> Integer -> IO()
-msghdrSetcontrollen' (NnMsghdr h) l = msghdrSetcontrollen'' h l
-msghdrSetcontrollen ::  NnFMsghdr -> Integer -> IO()
-msghdrSetcontrollen h v = withForeignPtr h (`msghdrSetcontrollen''` v)
-
-cmsghdrGetlen'' = (liftM toInteger) . {#get nn_cmsghdr.cmsg_len#}
-cmsghdrGetlen' :: NnMsghdr -> IO(Integer)
-cmsghdrGetlen' (NnMsghdr v) = cmsghdrGetlen'' v
-cmsghdrGetlen :: NnFMsghdr -> IO(Integer)
-cmsghdrGetlen = (`withForeignPtr` cmsghdrGetlen'')
-cmsghdrSetlen'' v l = {#set nn_cmsghdr.cmsg_len#} v (fromInteger l)
-cmsghdrSetlen' :: NnMsghdr -> Integer -> IO()
-cmsghdrSetlen' (NnMsghdr h) l = cmsghdrSetlen'' h l
-cmsghdrSetlen ::  NnFMsghdr -> Integer -> IO()
-cmsghdrSetlen h v = withForeignPtr h (`cmsghdrSetlen''` v)
-
-
-cmsghdrGetlevel'' = (liftM fromIntegral) . {#get nn_cmsghdr.cmsg_level#}
-cmsghdrGetlevel' :: NnMsghdr -> IO(Int)
-cmsghdrGetlevel' (NnMsghdr v) = cmsghdrGetlevel'' v
-cmsghdrGetlevel :: NnFMsghdr -> IO(Int)
-cmsghdrGetlevel = (`withForeignPtr` cmsghdrGetlevel'')
-cmsghdrSetlevel'' v l = {#set nn_cmsghdr.cmsg_level#} v (fromIntegral l)
-cmsghdrSetlevel' :: NnMsghdr -> Int -> IO()
-cmsghdrSetlevel' (NnMsghdr h) l = cmsghdrSetlevel'' h l
-cmsghdrSetlevel ::  NnFMsghdr -> Int -> IO()
-cmsghdrSetlevel h v = withForeignPtr h (`cmsghdrSetlevel''` v)
-
-cmsghdrGettype'' = (liftM fromIntegral) . {#get nn_cmsghdr.cmsg_type#}
-cmsghdrGettype' :: NnMsghdr -> IO(Int)
-cmsghdrGettype' (NnMsghdr v) = cmsghdrGettype'' v
-cmsghdrGettype :: NnFMsghdr -> IO(Int)
-cmsghdrGettype = (`withForeignPtr` cmsghdrGettype'')
-cmsghdrSettype'' v l = {#set nn_cmsghdr.cmsg_type#} v (fromIntegral l)
-cmsghdrSettype' :: NnMsghdr -> Int -> IO()
-cmsghdrSettype' (NnMsghdr h) l = cmsghdrSettype'' h l
-cmsghdrSettype ::  NnFMsghdr -> Int -> IO()
-cmsghdrSettype h v = withForeignPtr h (`cmsghdrSettype''` v)
-
-
--- TODO add align
-newNnIovec :: IO NnIovec
-newNnIovec = mallocBytes ( sizeOf (undefined::Ptr a) + {#sizeof size_t#} ) >>= (return . NnIovec . castPtr)
-freeNnIovec (NnIovec v) = free v
-newNnCmsghdr :: IO NnCmsghdr
-newNnCmsghdr = mallocBytes ( 2 * sizeOf (undefined::CInt) + {#sizeof size_t#}) >>= (return . NnCmsghdr . castPtr)
-freeNnCmsghdr (NnCmsghdr h) = free h
-newNnMsghdr :: IO NnMsghdr
-newNnMsghdr = mallocBytes ( 2 * sizeOf (undefined::Ptr a) + sizeOf (undefined::CInt) + {#sizeof size_t#}) >>= (return . NnMsghdr . castPtr)
-freeNnMsghdr (NnMsghdr h) = free h
-newFNnIovec = mallocForeignPtrBytes $ sizeOf (undefined::Ptr a) + {#sizeof size_t#}
-newFNnMsghdr = mallocForeignPtrBytes $ 2 * sizeOf (undefined::Ptr a) + sizeOf (undefined::CInt) + {#sizeof size_t#}
-newFNnCmsghdr = mallocForeignPtrBytes $ 2 * sizeOf (undefined::CInt) + {#sizeof size_t#}
-
 
 

@@ -16,6 +16,9 @@ import Foreign.C.String(peekCStringLen)
 import Foreign.C.String(newCString)
 import Foreign.C.String(newCAStringLen)
 import Foreign.C.String(peekCString)
+import qualified Data.ByteString as BS
+import Data.ByteString.Internal(ByteString(PS))
+import Data.List(foldl')
 import Control.Monad(foldM_)
 main :: IO ()
 main = do
@@ -125,26 +128,26 @@ main = do
  
    putStrLn "Startsend"
    threadDelay 200000
-   si <- alloca (\p -> poke p (3 :: CInt) >> nnSend' sockpair2 (castPtr p) (toInteger cintsize) [] >>= getEr)
-   if si == (toInteger cintsize) then return () else putStrLn "Size pb in send"
+   si <- alloca (\p -> poke p (3 :: CInt) >> nnSend' sockpair2 (castPtr p) cintsize [] >>= getEr)
+   if si == cintsize then return () else putStrLn "Size pb in send"
 
-   v <- alloca (\p -> nnRecv' sockpair1 (castPtr p) (toInteger cintsize) [] >>= getEr >> peekInteger (p :: Ptr CInt)) -- TODO peek with returned size!!
+   v <- alloca (\p -> nnRecv' sockpair1 (castPtr p) cintsize [] >>= getEr >> peekInt (p :: Ptr CInt)) -- TODO peek with returned size!!
 
    putStrLn $ "rec 1 : " ++ show v
    pv <- mallocForeignPtr :: IO (ForeignPtr CInt)
-   withForeignPtr pv (\pv' -> poke pv' (fromInteger (v+1)))
-   si <- nnSend sockpair2 (castForeignPtr pv) (toInteger cintsize) [] >>= getEr
-   if si == (toInteger cintsize) then return () else putStrLn "Size pb in send"
+   withForeignPtr pv (\pv' -> poke pv' (fromIntegral (v+1)))
+   si <- nnSend sockpair2 (castForeignPtr pv) cintsize [] >>= getEr
+   if si == cintsize then return () else putStrLn "Size pb in send"
    p <- mallocForeignPtr :: IO (ForeignPtr CInt)
-   nnRecv sockpair1 (castForeignPtr p) (toInteger cintsize) [] >>= getEr
-   v <- withForeignPtr p peekInteger
+   nnRecv sockpair1 (castForeignPtr p) cintsize [] >>= getEr
+   v <- withForeignPtr p peekInt
    putStrLn $ "rec 2 : " ++ show v
 
    putStrLn "* Test send/receive dyn size"
    let m = "Hello wordk" :: String
    let l = length m
    putStrLn $ show l
-   p <- nnAllocmsg (toInteger (l)) 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
+   p <- nnAllocmsg l 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
    p <- getEr p
    foldM_  (\a c -> pokeByteOff p a c >> return (a + 1)) 0 m
    m' <- peekCString (castPtr p)
@@ -156,11 +159,11 @@ main = do
 
    (sr, v) <- nnRecvDyn' sockpair1 []
    si <- getEr sr
-   r <- peekCStringLen ((castPtr v), (fromInteger si))
+   r <- peekCStringLen ((castPtr v),  si)
    putStrLn r
    let m2 = "Hello word2k" :: String
    let l2 = length m2
-   p2 <- nnAllocmsg (toInteger (l2)) 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
+   p2 <- nnAllocmsg (l2) 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
    p2 <- getEr p2
    foldM_  (\a c -> pokeByteOff p2 a c >> return (a + 1)) 0 m2
    r <- nnSendDyn sockpair2 (castPtr p2) [] -- TODO bracket it ??
@@ -171,7 +174,7 @@ main = do
    (sr, v) <- nnRecvDyn sockpair1 []
    si <- getEr sr
    putStrLn $ show si
-   r <- withForeignPtr (castForeignPtr v) (\p' ->  peekCStringLen (p', (fromInteger si))) -- double free error (stack) due to peekCStringLen doing deallocate on freeforeignpointer
+   r <- withForeignPtr (castForeignPtr v) (\p' ->  peekCStringLen (p',  si)) -- double free error (stack) due to peekCStringLen doing deallocate on freeforeignpointer
    putStrLn r
 
 
@@ -185,7 +188,13 @@ main = do
    iovec <- mallocArray nbvec
    pokeArray iovec [iovec1,iovec2]
 --   cmsghdr <- newNnCmsghdr
-   let msghdr = NNMsgHdr (castPtr iovec) (fromIntegral nbvec) nullPtr 0
+   let cmsghdr = NNCMsgHdr 3 1 1 -- level 1 type 1 size 0 only, dynamic length only
+   nncdata <- ptrToCData [(cmsghdr, "123")] -- TODO implement api which create hdr
+   
+   ptcdata <- malloc :: IO (Ptr CInt) -- any ptr TODO in api alloca or foreignfree
+   poke (castPtr ptcdata) (castPtr nncdata)
+   let msghdr = NNMsgHdr (castPtr iovec) (fromIntegral nbvec) (castPtr ptcdata) 1 -- Not implemented yet in NNMsg
+   let msghdr = NNMsgHdr (castPtr iovec) (fromIntegral nbvec) nullPtr 0 -- Not implemented yet in NNMsg
    cmsg <- cmsgFirstHdr msghdr
    case cmsg of
      Nothing -> putStrLn "ok"
@@ -218,7 +227,7 @@ main = do
    let m3 = "Hello word3k." :: String
    let l3 = length m3
    putStrLn $ show l3
-   p3' <- nnAllocmsg (toInteger (l3)) 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
+   p3' <- nnAllocmsg (l3) 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
    p3 <- getEr p3'
    ptS <- malloc :: IO (Ptr (Ptr CChar)) -- any ptr TODO in api alloca or foreignfree
    poke (castPtr ptS) p3
@@ -244,6 +253,7 @@ main = do
    -- on api do not new but allocaArray or foreignfree (given fix msg length)
    free ptS
    free ptR
+   free ptcdata
    free v1
    free v2
    free iovec
@@ -331,3 +341,17 @@ main = do
   getEr (Right b) = return b
   getErr (Just a) = showEr a
   getErr Nothing = return ()
+
+ptrToCData :: [(NNCMsgHdr, BS.ByteString)] -> IO (Ptr ()) -- TODO transform to with fn or foreignfree returned
+ptrToCData  a = do
+  let totle = foldl' (\acc (h, bs)-> acc + BS.length bs + sizeOf h) 0 a -- TODO do not use BS.length
+  ptr <- mallocBytes (totle)
+
+  foldM_ (pokeEl (ptr)) 0 a  >> return (ptr)
+    where pokeEl :: Ptr () -> Int -> (NNCMsgHdr, BS.ByteString) -> IO Int
+          pokeEl ptr offset (hdr, bs@(PS pbs pof ple)) = do
+                                        pokeElemOff (castPtr ptr) offset hdr
+                                        --pokeElemOff ptr (offset + sizeOf hdr) bs
+                                        withForeignPtr pbs $ \pbs' -> copyBytes ((castPtr ptr) `plusPtr` (offset + sizeOf hdr)) ((castPtr pbs') `plusPtr` pof) (ple - pof) -- TODO use unsafe bytestring api instead
+                                        return (offset + sizeOf hdr + (ple - pof))
+
