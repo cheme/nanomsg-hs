@@ -15,11 +15,20 @@ import Foreign.Storable(pokeElemOff)
 #include "inlinemacro.h"
 
 
+-- not c2hs (to type it explicitly as a funPtr for finalizer) and needed by struct
+foreign import ccall "System/NanoMsg/C/NanoMsg.chs.h &nn_freemsg"
+   nnFunPtrFreeMsg :: FunPtr (Ptr () -> IO ())
+
 nN_MSG = #const NN_MSG
 
 data NNIoVec = NNIoVec
   { iobase :: {-# UNPACK #-} !CString
   , ioleng :: {-# UNPACK #-} !CSize
+  }
+
+data NNFIoVec = NNFIoVec
+  { iofbase :: {-# UNPACK #-} !(ForeignPtr CString)
+  , iofleng :: {-# UNPACK #-} !CSize
   }
 
 instance Storable NNIoVec where
@@ -33,6 +42,20 @@ instance Storable NNIoVec where
     #{poke nn_iovec, iov_base} ptr base
     #{poke nn_iovec, iov_len} ptr leng
 
+instance Storable NNFIoVec where
+  alignment _ = #{alignment nn_iovec}
+  sizeOf _ = #{size nn_iovec}
+  peek ptr = do
+    leng <- #{peek nn_iovec, iov_len} ptr
+    if leng == (fromIntegral nN_MSG) then do
+      base <- #{peek nn_iovec, iov_base} ptr >>= newForeignPtr nnFunPtrFreeMsg
+      return $ NNFIoVec (castForeignPtr base) leng
+    else do
+      base <- #{peek nn_iovec, iov_base} ptr >>= newForeignPtr finalizerFree -- TODO array of finalizer instead??
+      return $ NNFIoVec base leng
+  poke ptr (NNFIoVec base leng) = do
+    withForeignPtr base (\b -> #{poke nn_iovec, iov_base} ptr b)
+    #{poke nn_iovec, iov_len} ptr leng
 
 data NNMsgHdr = NNMsgHdr
   { msgvecs :: {-# UNPACK #-} !(Ptr NNIoVec)
@@ -40,6 +63,30 @@ data NNMsgHdr = NNMsgHdr
   , msgctrl :: {-# UNPACK #-} !(Ptr ())
   , msglctr :: {-# UNPACK #-} !(CSize)
   }
+
+data NNFMsgHdr = NNFMsgHdr
+  { msgfvecs :: {-# UNPACK #-} !(ForeignPtr NNIoVec)
+  , msgflvec :: {-# UNPACK #-} !CInt
+  , msgfctrl :: {-# UNPACK #-} !(ForeignPtr ())
+  , msgflctr :: {-# UNPACK #-} !(CSize)
+  }
+
+instance Storable NNFMsgHdr where
+  alignment _ = #{alignment nn_msghdr}
+  sizeOf _ = #{size nn_msghdr}
+  peek ptr = do
+    vs <- #{peek nn_msghdr, msg_iov} ptr >>= newForeignPtr finalizerFree
+    vl <- #{peek nn_msghdr, msg_iovlen} ptr
+    cs <- #{peek nn_msghdr, msg_control} ptr >>= newForeignPtr finalizerFree
+    cl <- #{peek nn_msghdr, msg_controllen} ptr
+    return $ NNFMsgHdr vs vl cs cl
+  poke ptr (NNFMsgHdr vs vl cs cl) = do
+    withForeignPtr vs (\v -> #{poke nn_msghdr, msg_iov} ptr v)
+    #{poke nn_msghdr, msg_iovlen} ptr vl
+    withForeignPtr cs (\c -> #{poke nn_msghdr, msg_control} ptr c)
+    #{poke nn_msghdr, msg_controllen} ptr cl
+
+
 
 instance Storable NNMsgHdr where
   alignment _ = #{alignment nn_msghdr}

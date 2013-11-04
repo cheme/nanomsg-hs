@@ -212,7 +212,6 @@ pVoid pv = do
   return v
 
 
-
 foreignFreeMsg :: Ptr () -> IO(Either NnError (ForeignPtr ()))
 foreignFreeMsg =  either (return . Left) (return . Right <=< newForeignPtr nnFunPtrFreeMsg) <=< errorFromNewPointer
 
@@ -252,10 +251,6 @@ dummy' = {#call unsafe nn_term as ^ #}
 
 -- do not use if nnAllocmsg' used
 {#fun unsafe nn_freemsg as ^ {id `Ptr ()'} -> `Maybe NnError' errorFromRetCode* #}
-
--- not c2hs (to type it explicitly as a funPtr for finalizer) TODO test if discarding result is an issue with linking -- Internal use only 
-foreign import ccall "System/NanoMsg/C/NanoMsg.chs.h &nn_freemsg"
-   nnFunPtrFreeMsg :: FunPtr (Ptr () -> IO ())
 
 {#fun unsafe wfirsthdr as cmsgFirstHdr {fromMsgHdr* `NNMsgHdr'} -> `Maybe NNCMsgHdr' maybeCMsg*#}
 {#fun unsafe wnxthdr as cmsgNxtHdr {fromMsgHdr* `NNMsgHdr', fromCMsgHdr* `NNCMsgHdr'} -> `Maybe NNCMsgHdr' maybeCMsg* #}
@@ -318,8 +313,10 @@ endPointToCInt (NnEndPoint s) = s
 
 
 {#fun unsafe nn_sendmsg as ^ {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun unsafe nn_sendmsg as nnSendfmsg {socketToCInt `NnSocket', fromFMsgHdr* `NNFMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 
 {#fun nn_recvmsg as ^ {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun nn_recvmsg as nnRecvfmsg {socketToCInt `NnSocket', fromFMsgHdr* `NNFMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 --withFmsghdr :: NnFMsghdr -> Ptr()
 withFmsghdr f r =  withForeignPtr f (r . castPtr)
 -- | Warning value of constant NN_MSG is hardcoded to (-1). Due to restriction on cast with c2hs. TODO use #const in a separate hs2c file or use inline macro to cast to an int (dirty).
@@ -348,9 +345,11 @@ TODO single message send fn with allocmsg usage, and strcpy of bytestring? like 
 
 
 -- | Struct related Code for simplicity and to avoid boilerplate code, this could be refactor in a separate hs2c module with usage of data, or moved in c helper functions.
-fromMsgHdr ::  NNMsgHdr -> (Ptr () -> IO b)  -> IO b
+fromMsgHdr ::  NNMsgHdr -> (Ptr () -> IO b) -> IO b
 fromMsgHdr  = withPStorable'
-fromCMsgHdr ::  NNCMsgHdr -> (Ptr () -> IO b)  -> IO b
+fromFMsgHdr ::  NNFMsgHdr -> (Ptr () -> IO b) -> IO b
+fromFMsgHdr  = withPStorable'
+fromCMsgHdr ::  NNCMsgHdr -> (Ptr () -> IO b) -> IO b
 fromCMsgHdr  = withPStorable'
 toCMsgHdr :: Ptr () -> IO NNCMsgHdr
 toCMsgHdr = peek . castPtr

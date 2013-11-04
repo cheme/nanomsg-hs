@@ -16,7 +16,8 @@ module System.NanoMsg (
   -- ** Type Definition
     Socket
   , EndPoint
-  , Flag(..)
+  , Flag
+  , SndRcvFlags(..)
   -- ** Type Classes
   , SocketType
   , Sender
@@ -49,6 +50,13 @@ module System.NanoMsg (
   , usend
   , receive
   , ureceive
+  , sendMsg
+  , sendFMsg
+  , receiveSingleMsg
+  , receiveSingleFMsg
+  , receiveMultiMsg
+  , receiveMultiFMsg
+  , freeMsg
 
   , device
   -- * Socket general Options
@@ -60,16 +68,23 @@ module System.NanoMsg (
 import System.NanoMsg.C.NanoMsg
 import System.NanoMsg.C.NanoMsgStruct
 import Control.Exception(bracket)
-import Control.Applicative((<$>))
 import Control.Monad((<=<))
 import qualified Data.ByteString as BS
 import Data.ByteString.Internal(ByteString(PS))
 import Foreign.Ptr(castPtr)
 import Foreign(withForeignPtr)
 import Foreign.Marshal.Utils(copyBytes)
-import Foreign.Ptr(plusPtr)
 import Data.ByteString.Unsafe(unsafeUseAsCStringLen)
-import Foreign.ForeignPtr(castForeignPtr)
+import Foreign.Marshal.Alloc(malloc)
+import Foreign.Ptr(Ptr)
+import Foreign.Storable(poke)
+import Foreign.Ptr(nullPtr)
+import Foreign.ForeignPtr(mallocForeignPtr)
+import Foreign(ForeignPtr,castForeignPtr)
+import Foreign.Marshal.Alloc(finalizerFree)
+import Foreign(newForeignPtr)
+import Foreign.Marshal.Array(mallocArray)
+import Foreign.Marshal.Array(pokeArray)
 
 -- | Type for all socket
 newtype Socket a = Socket NnSocket
@@ -79,6 +94,17 @@ type Error = NnError
 
 -- | Type for flag
 type Flag = SndRcvFlags
+
+-- | Type for messages with only one part
+-- SingleMessage are restricted to only one part
+-- MultiMessage are not
+-- FMessage got automatic memory management (using ForeignPointer)
+-- Using FMessages is not always safer, and could be problematics (memory release depends upon garbage collector so it is not deterministic).
+-- TODO this and socket type should be rewritten to use gadt
+data SingleMessage = SingleMessage NNMsgHdr Int
+data SingleFMessage = SingleFMessage NNFMsgHdr Int 
+data MultiMessage = MultiMessage NNMsgHdr 
+data MultiFMessage = MultiFMessage NNFMsgHdr 
 
 -- | Type for Endpoint of sockets
 data EndPoint a = EndPoint NnSocket NnEndPoint
@@ -113,7 +139,6 @@ data Respondent = Respondent
 -- | Socket type for Bus protocol. See official documentation nn_bus(7)
 data Bus = Bus
 
-
 -- | Sockets which can 'send'.
 class (SocketType a) => Sender a
 
@@ -126,6 +151,20 @@ class (SocketType a) => HasRawSocket a
 -- | Socket underlying type
 class SocketType a where
   nnSocketType :: a -> NnProtocol
+
+-- | Msg class
+class Message a where
+  getCPtr :: a -> NNMsgHdr
+class FMessage a where
+  getCFPtr :: a -> NNFMsgHdr
+instance Message SingleMessage where
+  getCPtr (SingleMessage msg _) = msg
+instance Message MultiMessage where
+  getCPtr (MultiMessage msg) = msg
+instance FMessage SingleFMessage where
+  getCFPtr (SingleFMessage msg _) = msg
+instance FMessage MultiFMessage where
+  getCFPtr (MultiFMessage msg) = msg
 
 instance SocketType Pair where nnSocketType = const NN_PAIR
 instance Sender Pair
@@ -220,7 +259,7 @@ send (Socket s) fls val = BS.useAsCStringLen val (\(cs,l) -> nnSend' s (castPtr 
 
 -- | Variation of send using nanomsg allocate
 send' :: Sender a => Socket a -> [Flag] -> BS.ByteString -> IO (Either Error Int)
-send' (Socket s) fls val@(PS pbs pof ple) = do
+send' (Socket s) fls (PS pbs pof ple) = do
   p' <- nnAllocmsg (ple - pof) 0
   case p' of 
     Left e  -> return $ Left e
@@ -263,5 +302,90 @@ receive (Socket sock) fls = do
       bs <- BS.packCStringLen ((castPtr v), s)
       nnFreemsg v
       return $ Right bs
+
+-- | Send the given Message over the socket. See official documentation nn_sendmsg(3)
+sendMsg :: (Sender a, Message b) => Socket a -> [Flag] -> b -> IO (Either Error Int)
+sendMsg (Socket s) fls msg = nnSendmsg s (getCPtr msg) fls
+sendFMsg :: (Sender a, FMessage b) => Socket a -> [Flag] -> b -> IO (Either Error Int)
+sendFMsg (Socket s) fls msg = nnSendfmsg s (getCFPtr msg) fls
+
+
+-- | Same as 'receiveSingleMsg' but memory management is done by foreignPointer (at gc no freeMsg required). 
+receiveSingleFMsg :: Receiver a => Socket a -> [Flag] -> IO (Either Error SingleFMessage)
+receiveSingleFMsg (Socket sock) fls = do
+   -- TODO move this code in c interface
+   ptR <- mallocForeignPtr :: IO (ForeignPtr (Ptr ())) -- any ptr TODO in api alloca or foreignfree
+   let iovecR = NNFIoVec (castForeignPtr ptR) (fromIntegral nN_MSG)
+   iovecAR <- mallocForeignPtr :: IO (ForeignPtr NNFIoVec) -- only one element array
+   withForeignPtr iovecAR (\ar -> poke ar iovecR)
+   fnullPtr <- newForeignPtr finalizerFree nullPtr  
+   let msghdrRec = NNFMsgHdr (castForeignPtr iovecAR) 1 fnullPtr 0
+   sr <- nnRecvfmsg sock msghdrRec fls
+   case sr of 
+    Left e  -> return $ Left e
+    Right s -> do
+      return $ Right (SingleFMessage msghdrRec s)
+
+-- | Receive a Message from the to socket. See official documentation nn_recvmsg(3) 
+-- It uses dynamic size messages
+receiveSingleMsg :: Receiver a => Socket a -> [Flag] -> IO (Either Error SingleMessage)
+receiveSingleMsg (Socket sock) fls = do
+   -- TODO move this code in c interface
+   ptR <- malloc :: IO (Ptr (Ptr ())) -- any ptr TODO in api alloca or foreignfree
+   let iovecR = NNIoVec (castPtr ptR) (fromIntegral nN_MSG)
+   iovecAR <- malloc :: IO (Ptr NNIoVec) -- only one element array
+   poke iovecAR iovecR
+   let msghdrRec = NNMsgHdr (castPtr iovecAR) 1 nullPtr 0
+   sr <- nnRecvmsg sock msghdrRec fls
+   case sr of 
+    Left e  -> return $ Left e
+    Right s -> do
+      return $ Right (SingleMessage msghdrRec s)
+
+-- | Receive a Message from the to socket. See official documentation nn_recvmsg(3)
+-- A list of size for each parts is used to allocate memory buffer.
+receiveMultiMsg :: Receiver a => Socket a -> [Flag] -> [Int] -> IO (Either Error MultiMessage)
+receiveMultiMsg (Socket sock) fls sizes = do
+   -- TODO move this code in c interface
+   let nbvec = length sizes
+   iovecR <- mallocArray nbvec
+   iovecR' <- mapM (\s -> mallocArray s >>= (\a -> return (NNIoVec a (fromIntegral s)))) sizes
+   pokeArray iovecR iovecR'
+   let msghdrRec = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0
+   sr <- nnRecvmsg sock msghdrRec fls
+   case sr of 
+    Left e  -> return $ Left e
+    Right _ -> do
+      return $ Right (MultiMessage msghdrRec)
+
+
+-- | Sames as 'receiveMultiMsg' but with Foreign pointer Messages
+receiveMultiFMsg :: Receiver a => Socket a -> [Flag] -> [Int] -> IO (Either Error MultiFMessage)
+receiveMultiFMsg (Socket sock) fls sizes = do
+   -- TODO move this code in c interface
+   let nbvec = length sizes
+   iovecR <- mallocArray nbvec >>= newForeignPtr finalizerFree
+   iovecR' <- mapM (\s -> mallocArray s >>= newForeignPtr finalizerFree >>= (\a -> return (NNFIoVec a (fromIntegral s)))) sizes
+   withForeignPtr iovecR (\p -> pokeArray p iovecR')
+   fnullPtr <- newForeignPtr finalizerFree nullPtr
+   let msghdrRec = NNFMsgHdr (castForeignPtr iovecR) (fromIntegral nbvec) fnullPtr 0
+   sr <- nnRecvfmsg sock msghdrRec fls
+   case sr of 
+    Left e  -> return $ Left e
+    Right _ -> do
+      return $ Right (MultiFMessage msghdrRec)
+
+
+
+-- | Finalizer for Message.
+freeMsg :: Message b => b -> IO () -- TODO a with for bracketing
+freeMsg msg = return () -- TODO!!! free each ptr of the underlying structs and conditional nnFreeMsg depending on size.
+
+-- | initiate multipart message from bytestrings
+-- | initiate empty message
+-- | add message part
+-- | initiate empty fmessage
+-- | add message part, expecting a freeForeignPointer as parameter
+-- | initiate single message with dynamic size
 
 
