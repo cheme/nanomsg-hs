@@ -19,6 +19,7 @@ import Foreign.Storable(pokeElemOff)
 foreign import ccall "System/NanoMsg/C/NanoMsg.chs.h &nn_freemsg"
    nnFunPtrFreeMsg :: FunPtr (Ptr () -> IO ())
 
+nN_MSG :: CInt
 nN_MSG = #const NN_MSG
 
 data NNIoVec = NNIoVec
@@ -27,7 +28,7 @@ data NNIoVec = NNIoVec
   }
 
 data NNFIoVec = NNFIoVec
-  { iofbase :: {-# UNPACK #-} !(ForeignPtr CString)
+  { iofbase :: {-# UNPACK #-} !(ForeignPtr CChar)
   , iofleng :: {-# UNPACK #-} !CSize
   }
 
@@ -65,7 +66,7 @@ data NNMsgHdr = NNMsgHdr
   }
 
 data NNFMsgHdr = NNFMsgHdr
-  { msgfvecs :: {-# UNPACK #-} !(ForeignPtr NNIoVec)
+  { msgfvecs :: !([NNFIoVec])
   , msgflvec :: {-# UNPACK #-} !CInt
   , msgfctrl :: {-# UNPACK #-} !(ForeignPtr ())
   , msgflctr :: {-# UNPACK #-} !(CSize)
@@ -75,18 +76,18 @@ instance Storable NNFMsgHdr where
   alignment _ = #{alignment nn_msghdr}
   sizeOf _ = #{size nn_msghdr}
   peek ptr = do
-    vs <- #{peek nn_msghdr, msg_iov} ptr >>= newForeignPtr finalizerFree
     vl <- #{peek nn_msghdr, msg_iovlen} ptr
+    vs <- #{peek nn_msghdr, msg_iov} ptr >>= peekArray (fromIntegral vl)
     cs <- #{peek nn_msghdr, msg_control} ptr >>= newForeignPtr finalizerFree
     cl <- #{peek nn_msghdr, msg_controllen} ptr
     return $ NNFMsgHdr vs vl cs cl
   poke ptr (NNFMsgHdr vs vl cs cl) = do
-    withForeignPtr vs (\v -> #{poke nn_msghdr, msg_iov} ptr v)
+    ar <- mallocArray (fromIntegral vl)
+    pokeArray ar vs
+    #{poke nn_msghdr, msg_iov} ptr ar
     #{poke nn_msghdr, msg_iovlen} ptr vl
     withForeignPtr cs (\c -> #{poke nn_msghdr, msg_control} ptr c)
     #{poke nn_msghdr, msg_controllen} ptr cl
-
-
 
 instance Storable NNMsgHdr where
   alignment _ = #{alignment nn_msghdr}

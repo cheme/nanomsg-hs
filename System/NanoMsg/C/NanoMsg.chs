@@ -150,6 +150,7 @@ import qualified Data.List as L
 -- | internal only
 class (Enum a) => AllSocketOptions a
 instance AllSocketOptions ReqRepOptions
+instance AllSocketOptions SurveyOptions
 instance AllSocketOptions PubSubOptions
 instance AllSocketOptions SocketOptions
 instance AllSocketOptions TcpOptions
