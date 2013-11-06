@@ -3,10 +3,10 @@ name:                nanomsg-hs
 --                   | | +----- non-breaking API additions
 --                   | | | +--- code changes with no API change
 version:             0.0.1
-synopsis:            Haskell API and binding for nanomsg C library (http://nanomsg.org)
+synopsis:            Binding for nanomsg C library 
 description:         
   Nanomsg-hs, provides an API for simple usage with Haskell and with a Socket Type abstraction similar to zeromq3-haskell. The Haskell typing is used to reduce in use error occurence.
-  The API may not be suited to advanced usage, in term of performance, or library customization. In this case the lower level C binding could be used .
+  The API may not be suited to advanced usage, in term of performance, or library customization. In this case the lower level C binding could be used. For nanomsg documentation please refer to http://nanomsg.org.
 homepage:            http://github.com/cheme/nanomsg-hs
 license:             MIT
 license-file:        LICENSE
@@ -19,6 +19,7 @@ tested-With:         GHC == 7.6.3
 build-type:          Simple
 extra-source-files:  README.md
                   ,  AUTHORS
+                  ,  test/*.hs
 cabal-version:       >=1.10
 
 
@@ -34,6 +35,14 @@ library
   build-depends:       base >=4.6 && <4.7, bytestring >=0.10 && <0.11
   build-tools:         hsc2hs, c2hs
   default-language:    Haskell2010
+
+test-suite nanomsg-hs-tests
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             main.hs
+  other-modules:       Api
+  build-depends:       nanomsg-hs, base >=4.6 && <4.7, bytestring >=0.10 && <0.11, QuickCheck >= 2.6, HUnit >= 1.2
+  ghc-options:         -Wall -O2 -threaded -rtsopts
 
 
 source-repository head

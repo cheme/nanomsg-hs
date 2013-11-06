@@ -29,16 +29,6 @@ main = do
  case args of 
   [host, port] -> do
    putStrLn "* Test nn_socket"
-   -- testing nn_socket (c level : return a generic socket)
-   eSockpub <- nnSocket AF_SP NN_PUB
-   sockpub <- getEr eSockpub
-   
-   eSocksub <- nnSocket AF_SP NN_SUB
-   socksub <- getEr eSockpub
-
-   nnSocket AF_SP_RAW NN_PUB >>= getEr -- not supported should return EAFNOSUPPORT but EINVAL TODO
-   nnSocket AF_SP_RAW NN_SUB >>= getEr -- not supported should return EAFNOSUPPORT but EINVAL TODO
-   putStrLn "* Test nn_socket"
    xsocksurveyor <- nnSocket AF_SP_RAW NN_SURVEYOR >>= getEr -- ok
    xsockrespondent <- nnSocket AF_SP_RAW NN_RESPONDENT >>= getEr -- ok
    xsockbus <- nnSocket AF_SP_RAW NN_BUS >>= getEr -- ok
@@ -59,125 +49,14 @@ main = do
    sockpull <- nnSocket AF_SP NN_PULL >>= getEr -- ok
    sockreq <- nnSocket AF_SP NN_REQ >>= getEr -- ok
    sockrep <- nnSocket AF_SP NN_REP >>= getEr -- ok
+   nnBind sockpair1 "inproc://test1"
+   nnConnect sockpair2 "inproc://test1"
+ 
  -- testing emfile error -> ok (EMFILE) "but disabled here"
 --   forever $ do 
 --                   eSockpub' <- nnSocket AF_SP_RAW NN_PAIR
 --                   sockpub' <- getEr eSockpub' -- supported
 --                   return ()
-
-   putStrLn "* Test nn_close"
-   nnSocket AF_SP NN_PUB >>= getEr >>= nnClose >>= getErr
-   s' <- nnSocket AF_SP NN_PUB >>= getEr
-   nnClose s' >>= getErr -- ok
-   nnClose s' >>= getErr -- EBDAF : ok
-   -- TODO : test EINTR : no idea (interrupt by signal)...
-  
-   
-   putStrLn "* Test nn_getsockopt nn_setsockopt"
-   -- Domain
-   let cintsize = sizeOf (undefined :: CInt)
-   (err, val, size) <- allocaBytes cintsize (\p -> nnGetsockopt sockpub NN_SOL_SOCKET NN_DOMAIN p cintsize)
-   case err of
-     Nothing -> do
-                    v <- peek (castPtr val :: Ptr CInt) >>= (return . (cIntToEnum :: CInt -> AddressFamilies))
-                    putStrLn $ show size ++ " " ++ show v
-
-   (err, val, size) <- allocaBytes cintsize (\p -> nnGetsockopt sockpub NN_SOL_SOCKET NN_PROTOCOL p cintsize)
-   case err of
-     Nothing -> do
-                    v <- peek (castPtr val :: Ptr CInt) >>= (return . (cIntToEnum :: CInt -> NnProtocol))
-                    putStrLn $ show size ++ " " ++ show v
-     Just e -> showEr e -- EFAULT (Bad Address) Error : not expected from doc TODO!!!
-   -- TODO test after bind and after connect (not binded)
-   
-   (err, val, size) <- allocaBytes cintsize (\p -> nnGetsockopt sockpub NN_SOL_SOCKET NN_LINGER p cintsize)
-   case err of
-     Nothing -> do  
-                    v <- peekInt (castPtr val :: Ptr CInt)
-                    putStrLn $ show size ++ " " ++ show v
-     Just e -> showEr e
-   let clinger = fromIntegral 500000 :: CInt
-   alloca (\p -> poke p clinger >> nnSetsockopt sockpub NN_SOL_SOCKET NN_LINGER (castPtr p) (fromIntegral (sizeOf clinger))) >>= getErr 
-   let ctimout = fromIntegral 10000 :: CInt
-   alloca (\p -> poke p ctimout >> nnSetsockopt sockpair1' NN_SOL_SOCKET NN_SNDTIMEO (castPtr p) (fromIntegral (sizeOf clinger))) >>= getErr
-   alloca (\p -> poke p ctimout >> nnSetsockopt sockpair2' NN_SOL_SOCKET NN_SNDTIMEO (castPtr p) (fromIntegral (sizeOf clinger))) >>= getErr
-   alloca (\p -> poke p ctimout >> nnSetsockopt sockpair1' NN_SOL_SOCKET NN_RCVTIMEO (castPtr p) (fromIntegral (sizeOf clinger))) >>= getErr
-   alloca (\p -> poke p ctimout >> nnSetsockopt sockpair2' NN_SOL_SOCKET NN_RCVTIMEO (castPtr p) (fromIntegral (sizeOf clinger))) >>= getErr
-
--- TODO free ptr
-   (err, val, size) <- allocaBytes cintsize (\p -> nnGetsockopt sockpub NN_SOL_SOCKET NN_LINGER p cintsize)
-   case err of
-     Nothing -> do
-                    v <- peekInt (castPtr val :: Ptr CInt)
-                    putStrLn $ show size ++ " " ++ show v -- TODO what if return size differs from allocate size??
-     Just e -> showEr e
-   -- TODO test each option in their own functions...
-
-   putStrLn "* Test bind/connect"
-   -- testing bind and connect TODO API with transport specific addresses
-   eppush <- nnBind sockpush ("dummy://" ++ host ++ "/" ++ port) >>= getEr -- protonotsupportend
---   eppush <- nnBind sockpair1' ("tcp://" ++ host ++ "/" ++ port) >>= getEr -- Einval : invalid arg (not transport)
-   --eppull <- nnBind sockpair1' ("tcp://" ++ host ++ ":" ++ port) >>= getEr
-   --eppush <- nnConnect sockpair2' ("tcp://" ++ host ++ ":" ++ port) >>= getEr
-
-   eppair1 <- nnBind sockpair1 ("inproc://test") >>= getEr
---   eppair2 <- nnBind sockpair2 ("inproc://test") >>= getEr -- EAddrinUse = address already in use
-   eppair2 <- nnConnect sockpair2 ("inproc://test") >>= getEr
-
-   putStrLn "* Test send/receive static size"
- 
-   putStrLn "Startsend"
-   threadDelay 200000
-   si <- alloca (\p -> poke p (3 :: CInt) >> nnSend' sockpair2 (castPtr p) cintsize [] >>= getEr)
-   if si == cintsize then return () else putStrLn "Size pb in send"
-
-   v <- alloca (\p -> nnRecv' sockpair1 (castPtr p) cintsize [] >>= getEr >> peekInt (p :: Ptr CInt)) -- TODO peek with returned size!!
-
-   putStrLn $ "rec 1 : " ++ show v
-   pv <- mallocForeignPtr :: IO (ForeignPtr CInt)
-   withForeignPtr pv (\pv' -> poke pv' (fromIntegral (v+1)))
-   si <- nnSend sockpair2 (castForeignPtr pv) cintsize [] >>= getEr
-   if si == cintsize then return () else putStrLn "Size pb in send"
-   p <- mallocForeignPtr :: IO (ForeignPtr CInt)
-   nnRecv sockpair1 (castForeignPtr p) cintsize [] >>= getEr
-   v <- withForeignPtr p peekInt
-   putStrLn $ "rec 2 : " ++ show v
-
-   putStrLn "* Test send/receive dyn size"
-   let m = "Hello wordk" :: String
-   let l = length m
-   putStrLn $ show l
-   p <- nnAllocmsg l 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
-   p <- getEr p
-   foldM_  (\a c -> pokeByteOff p a c >> return (a + 1)) 0 m
-   m' <- peekCString (castPtr p)
-   putStrLn $ show m'
-   r <- nnSendDyn sockpair2 (castPtr p) [] -- TODO bracket it ??
-   si <- getEr r
-   case r of Left _ -> nnFreemsg p
-             Right _ -> return Nothing
-
-   (sr, v) <- nnRecvDyn' sockpair1 []
-   si <- getEr sr
-   r <- peekCStringLen ((castPtr v),  si)
-   putStrLn r
-   let m2 = "Hello word2k" :: String
-   let l2 = length m2
-   p2 <- nnAllocmsg (l2) 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
-   p2 <- getEr p2
-   foldM_  (\a c -> pokeByteOff p2 a c >> return (a + 1)) 0 m2
-   r <- nnSendDyn sockpair2 (castPtr p2) [] -- TODO bracket it ??
-   si <- getEr r
-   case r of Left _ -> nnFreemsg p2
-             Right _ -> return Nothing
-
-   (sr, v) <- nnRecvDyn sockpair1 []
-   si <- getEr sr
-   putStrLn $ show si
-   r <- withForeignPtr (castForeignPtr v) (\p' ->  peekCStringLen (p',  si)) -- double free error (stack) due to peekCStringLen doing deallocate on freeforeignpointer
-   putStrLn r
-
-
    putStrLn "* Test nn_cmsg"
    -- message from send msg first example as non foreign
    (v1, l1) <- newCAStringLen "Hello"

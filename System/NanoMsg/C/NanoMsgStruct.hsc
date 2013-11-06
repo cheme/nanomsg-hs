@@ -7,10 +7,6 @@ module System.NanoMsg.C.NanoMsgStruct where
 import Foreign
 import Foreign.C.Types
 import Foreign.C.String
-import qualified Data.ByteString as BS
-import Data.List(foldl')
-import Control.Monad(foldM_)
-import Foreign.Storable(pokeElemOff)
 #include "nanomsg/nn.h"
 #include "inlinemacro.h"
 

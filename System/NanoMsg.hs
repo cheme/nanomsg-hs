@@ -249,7 +249,6 @@ withEither :: (Monad m) => (i -> m o) -> Either e i -> m (Either e o)
 withEither r = either (return . Left) (return . Right <=< r)
 
 -- | Create a new nanomsg socket. Socket must be close explicitely. It is safer to use 'withSocket' See official documentation nn_socket(3)
-
 socket :: SocketType a => a -> IO (Either Error (Socket a))
 socket t = liftM (fmap Socket) $ nnSocket AF_SP (nnSocketType t)  
 
@@ -333,7 +332,7 @@ receive (Socket sock) fls = do
     Left e  -> return $ Left e
     Right s -> do
       bs <- BS.packCStringLen (castPtr v, s)
-      nnFreemsg v
+      _  <- nnFreemsg v
       return $ Right bs
 
 -- | Send the given Message over the socket. See official documentation nn_sendmsg(3)
@@ -474,6 +473,7 @@ newSinglemessage (PS pbs pof ple) = do
        withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs') l)
        return $ Right $ SingleMessage msghdr l
 
+-- | initiate singlepart fmessage (memory manage through foreign pointers) from a bytestring
 newSinglefmessage :: ByteString -> IO (Either Error SingleFMessage)
 newSinglefmessage (PS pbs pof ple) = do
    ptR <- mallocForeignPtr :: IO (ForeignPtr (Ptr ()))
@@ -566,7 +566,7 @@ freeMsg msg = freeNNMsghdr $ getCPtr msg where
     ios <- peekArray (fromIntegral vl) vs
     mapM_ (\(NNIoVec base iol) ->
       if iol == fromIntegral nN_MSG then do
-        nnFreemsg (castPtr base)
+        _ <- nnFreemsg (castPtr base)
         return () -- ignore error
       else
         free base

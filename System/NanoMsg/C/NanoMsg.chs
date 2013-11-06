@@ -1,17 +1,13 @@
 {-# LANGUAGE CPP, ForeignFunctionInterface #-}
   
-module System.NanoMsg.C.NanoMsg where
 -- | This module aims at exposing nanomsg function directly to haskell, no api construct except the use of ForeignFreePointers. Function specific documentation is therefore the official nanomsg documentation. An exception is also done for error handling, here we use maybe or either. Note that it is a c2hs module and that returning type of function may contain function parameter when they may be changed (a tuple with firstly function return type then all parameters in order).
 -- Send and receive function are not set unsafe, this is thread unsafe, but waiting for some issue (during tests) to set them safe and use similar work arround as in zmq binding (nowait all the time but use haskell threadWriteRead to wait in a ghc non blocking thread way).
+module System.NanoMsg.C.NanoMsg where
 import System.NanoMsg.C.NanoMsgStruct
 import Foreign
 import Foreign.C.Types
 import Foreign.C.String
-import Control.Monad(liftM)
-import Foreign.Ptr(FunPtr(..))
-import qualified Control.Monad as M
-import Control.Monad((>=>))
-import Control.Monad((<=<))
+import Control.Monad((<=<),liftM)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Unsafe as U
@@ -29,10 +25,19 @@ import qualified Data.List as L
 #include "nanomsg/ipc.h"
 #include "inlinemacro.h"
 
--- TODO change all size_t to Int (currently Int)
-
 -- #include "nanomsg/transport.h"
 -- #include "nanomsg/protocol.h"
+
+newtype NnSocket = NnSocket CInt deriving (Eq, Show)
+
+socketToCInt :: NnSocket -> CInt
+socketToCInt (NnSocket s) = s
+
+newtype NnEndPoint = NnEndPoint CInt deriving (Eq, Show)
+
+endPointToCInt :: NnEndPoint -> CInt
+endPointToCInt (NnEndPoint s) = s
+
 {#enum define NnError 
   { ENOTSUP as ENOTSUP
   , ENOMEM as ENOMEM
@@ -77,7 +82,7 @@ import qualified Data.List as L
   { NN_IPC as NN_IPC
   , NN_INPROC as NN_INPROC
   , NN_TCP as NN_TCP } deriving (Eq,Ord,Show) #}
--- TODO associate to their protocol
+-- TODO link with their protocol
 {#enum define ProtocolFamilies
   { NN_PROTO_PUBSUB as NN_PROTO_PUBSUB
   , NN_PROTO_BUS as NN_PROTO_BUS
@@ -182,6 +187,8 @@ peekInt = (liftM fromIntegral) . peek
 -- TODO inline
 withPStorable :: (Storable a) => a -> (Ptr a -> IO b)  -> IO b
 withPStorable i r = alloca (\p -> poke p i >> r p) 
+
+withPStorable' :: (Storable a) => a -> (Ptr c -> IO b)  -> IO b
 withPStorable' i r = alloca (\p -> poke p i >> r (castPtr p)) 
 
 withPIntegral :: (Storable a, Num a, Integral c) => c -> (Ptr a -> IO b)  -> IO b
@@ -216,9 +223,13 @@ pVoid pv = do
 foreignFreeMsg :: Ptr () -> IO(Either NnError (ForeignPtr ()))
 foreignFreeMsg =  either (return . Left) (return . Right <=< newForeignPtr nnFunPtrFreeMsg) <=< errorFromNewPointer
 
+cPackCString :: CString -> IO ByteString
 cPackCString = C.packCString
+ucPackCString :: Ptr a -> IO ByteString
 ucPackCString = C.packCString . castPtr
+uPackCString :: CString -> IO ByteString
 uPackCString = U.unsafePackCString
+uuPackCString :: Ptr a -> IO ByteString
 uuPackCString = U.unsafePackCString . castPtr
 
 errorFromRetCode :: CInt -> IO(Maybe NnError)
@@ -243,7 +254,7 @@ errorFromEndPoint r = if r < 0 then nnErrno >>= return . Left else (return . Rig
 {#fun unsafe nn_symbol as ^ {fromIntegral `Int', alloca- `Int' peekInt*} -> `String' peekCString* #}
 {#fun unsafe nn_strerror as ^ {cIntFromEnum `NnError' } -> `String' peekCString* #}
 
--- TODO code from sample to catch errors
+dummy' :: IO ()
 dummy' = {#call unsafe nn_term as ^ #}
 
 -- type of allocation is transport dependant -- see transport implementation --> for haskell api link it to the transport used -- TODO (tricky??)
@@ -267,8 +278,6 @@ dummy' = {#call unsafe nn_term as ^ #}
 {#fun unsafe wspace as cmsgSpace' { fromIntegral `Int'} -> `Int' fromIntegral #}
 
 
-newtype NnSocket = NnSocket CInt deriving (Eq, Show)
-socketToCInt (NnSocket s) = s
 -- TODO enum for domain???
 {#fun unsafe nn_socket as ^ { cIntFromEnum `AddressFamilies', cIntFromEnum `NnProtocol'} -> `Either NnError NnSocket' errorFromSocket* #}
 
@@ -287,8 +296,6 @@ withNullPtr r = r nullPtr
 --{#fun unsafe nn_getsockopt as ^ `(AllSocketOptions a, AllLevelOptions b)' => {socketToCInt `NnSocket', cIntFromEnum `b', cIntFromEnum `a', withNullPtr- `Ptr ()' id,  alloca- `Int' peekInt*} -> `Maybe NnError' errorFromRetCode* #}
 {#fun unsafe nn_getsockopt as ^ `(AllSocketOptions a, AllLevelOptions b)' => {socketToCInt `NnSocket', cIntFromEnum `b', cIntFromEnum `a', id `Ptr ()' id, withPIntegral* `Int' peekInt*} -> `Maybe NnError' errorFromRetCode* #}
 
-newtype NnEndPoint = NnEndPoint CInt deriving (Eq, Show)
-endPointToCInt (NnEndPoint s) = s
 -- TODO bind an address type to avoid address without :// (in api(one per transport) using NN_SOCKADDR_MAX)
 {#fun unsafe nn_bind as ^ {socketToCInt `NnSocket', withCString* `String'} ->  `Either NnError NnEndPoint' errorFromEndPoint* #}
 
@@ -318,34 +325,18 @@ endPointToCInt (NnEndPoint s) = s
 
 {#fun nn_recvmsg as ^ {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 {#fun nn_recvmsg as nnRecvfmsg {socketToCInt `NnSocket', fromFMsgHdr* `NNFMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
---withFmsghdr :: NnFMsghdr -> Ptr()
+
+withFmsghdr :: ForeignPtr a -> (Ptr c -> IO b) -> IO b
 withFmsghdr f r =  withForeignPtr f (r . castPtr)
--- | Warning value of constant NN_MSG is hardcoded to (-1). Due to restriction on cast with c2hs. TODO use #const in a separate hs2c file or use inline macro to cast to an int (dirty).
+
+withNnMSG :: Num a => (a -> b) -> b
 withNnMSG a = a (fromIntegral nN_MSG)
 
--- | TODO api with fork (with correct mask) + socket type incompatibilities?
+-- TODO api with fork (with correct mask) + socket type incompatibilities?
 {#fun unsafe nn_device as ^ {socketToCInt `NnSocket', socketToCInt `NnSocket'} -> `Maybe NnError' errorFromRetCode* #}
-{- 
-* struct nn_cmsghdr *NN_CMSG_FIRSTHDR(struct nn_msghdr *hdr);
-NN_CMSG_FIRSTHDR returns a pointer to the first nn_cmsghdr in the control buffer in the supplied nn_msghdr structure. => in struct length level and type -> generic enum other level and type
-* struct nn_cmsghdr *NN_CMSG_NXTHDR(struct nn_msghdr *hdr, struct nn_cmsghdr *cmsg);
-NN_CMSG_NXTHDR returns the next nn_cmsghdr after the supplied nn_cmsghdr. Returns NULL if there isn’t enough space in the buffer.
-* unsigned char *NN_CMSG_DATA(struct nn_cmsghdr *cmsg);
-NN_CMSG_DATA returns a pointer to the data associated with supplied nn_cmsghdr. => fuck magic one (nothing like this in the struct plus return unsigned char *) -> pointer + 1 : stupid
-* size_t NN_CMSG_SPACE(size_t len);
-NN_CMSG_SPACE returns the number of bytes occupied by nn_cmsghdr with payload of the specified length. => fuck magic to use len and return size -> no just a multiplication -> pure function
-* size_t NN_CMSG_LEN(size_t len);
-NN_CMSG_LEN returns the value to store in the cmsg_len member of the cmsghdr structure, taking into account any necessary alignment. => idem
 
-TODO a function for : Alternatively, to send a buffer allocated by nn_allocmsg(3) function set iov_base to point to the pointer to the buffer and iov_len to NN_MSG constant. In this case a successful call to nn_send will deallocate the buffer. Trying to deallocate it afterwards will result in undefined behaviour. Also, scatter array in nn_msghdr structure can contain only one element in this case. = send
+-- Struct related Code for simplicity and to avoid boilerplate code, this could be refactor in a separate hs2c module with usage of data, or moved in c helper functions.
 
-TODO a function for : Alternatively, nanomsg library can allocate the buffer for you. To do so, let the iov_base point to void* variable to receive the buffer and set iov_len to NN_MSG. After successful completion user is responsible for deallocating the message using nn_freemsg(3) function. Gather array in nn_msghdr structure can contain only one element in this case. = receive : not from exemple all must be allocated
-
-TODO single message send fn with allocmsg usage, and strcpy of bytestring? like send example (with work on pointers.
--}
-
-
--- | Struct related Code for simplicity and to avoid boilerplate code, this could be refactor in a separate hs2c module with usage of data, or moved in c helper functions.
 fromMsgHdr ::  NNMsgHdr -> (Ptr () -> IO b) -> IO b
 fromMsgHdr  = withPStorable'
 fromFMsgHdr ::  NNFMsgHdr -> (Ptr () -> IO b) -> IO b
@@ -354,6 +345,8 @@ fromCMsgHdr ::  NNCMsgHdr -> (Ptr () -> IO b) -> IO b
 fromCMsgHdr  = withPStorable'
 toCMsgHdr :: Ptr () -> IO NNCMsgHdr
 toCMsgHdr = peek . castPtr
+
+maybeCMsg :: Ptr () -> IO (Maybe NNCMsgHdr)
 maybeCMsg m = if m == nullPtr then return Nothing else toCMsgHdr m >>= (return . Just)
 
 
