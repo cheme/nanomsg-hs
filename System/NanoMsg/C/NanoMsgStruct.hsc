@@ -123,10 +123,5 @@ instance Storable NNCMsgHdr where
     #{poke nn_cmsghdr, cmsg_level} ptr le
     #{poke nn_cmsghdr, cmsg_type} ptr ty
 
-
-
-
-
-
 #let alignment t = "%lu", (unsigned long)offsetof(struct {char x__; t (y__); }, y__)
 

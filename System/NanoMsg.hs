@@ -81,7 +81,14 @@ module System.NanoMsg (
   , getIPV4ONLY
   , setIPV4ONLY
   -- * Socket specific options
-  
+  , getReqResendInterval
+  , setReqResendInterval
+  , getSubSubscribe
+  , setSubSubscribe
+  , getSubUnsubscribe
+  , setSubUnsubscribe
+  , getSurveyorDeadline
+  , setSurveyorDeadline
   -- * Message manipulation operations
   , newMultimessage
   , newMultimessage'
@@ -99,39 +106,19 @@ module System.NanoMsg (
 import System.NanoMsg.C.NanoMsg
 import System.NanoMsg.C.NanoMsgStruct
 import Control.Exception(bracket)
-import Control.Monad((<=<))
 import qualified Data.ByteString as BS
 import Data.ByteString.Internal(ByteString(PS))
-import Foreign.Ptr(castPtr)
-import Foreign(withForeignPtr)
 import Foreign.Marshal.Utils(copyBytes)
 import Data.ByteString.Unsafe(unsafeUseAsCStringLen)
-import Foreign.Marshal.Alloc(malloc)
-import Foreign.Ptr(Ptr)
-import Foreign.Storable(poke)
-import Foreign.Ptr(nullPtr)
-import Foreign.ForeignPtr(mallocForeignPtr)
-import Foreign(ForeignPtr,castForeignPtr)
-import Foreign.Marshal.Alloc(finalizerFree)
-import Foreign(newForeignPtr)
-import Foreign.Marshal.Array(mallocArray)
-import Foreign.Marshal.Array(pokeArray)
-import Foreign.Storable(Storable)
-import Foreign.ForeignPtr(mallocForeignPtrArray)
-import Foreign.Storable(sizeOf)
-import Foreign.Marshal.Array(reallocArray)
-import Foreign.Ptr(plusPtr)
-import Foreign.Marshal.Alloc(free)
-import Control.Monad(unless)
-import Foreign.Marshal.Array(peekArray)
+import Foreign(newForeignPtr,withForeignPtr)
+import Foreign.ForeignPtr(ForeignPtr,castForeignPtr,mallocForeignPtr,mallocForeignPtrArray)
+import Foreign.Ptr(Ptr,nullPtr,plusPtr,castPtr)
+import Foreign.Marshal.Alloc(alloca,allocaBytes,finalizerFree,malloc,free)
+import Foreign.Marshal.Array(mallocArray,reallocArray,pokeArray,peekArray)
 import Foreign.C.Types(CInt)
-import Foreign.Marshal.Alloc(allocaBytes)
-import Foreign.Storable(peek)
-import Control.Monad(liftM)
-import Foreign.Marshal.Alloc(alloca)
-import Foreign.C.String(withCString)
-import Foreign.C.String(CString)
-import Foreign.C.String(peekCStringLen)
+import Foreign.Storable(Storable,sizeOf,peek,poke)
+import Control.Monad((<=<),liftM,unless)
+import Foreign.C.String(withCString,peekCStringLen)
 
 -- | Type for all socket
 newtype Socket a = Socket NnSocket
@@ -359,7 +346,6 @@ sendFMsg (Socket s) fls msg = nnSendfmsg s (getCFPtr msg) fls
 -- | Same as 'receiveSingleMsg' but memory management is done by foreignPointer (at gc no freeMsg required). 
 receiveSingleFMsg :: Receiver a => Socket a -> [Flag] -> IO (Either Error SingleFMessage)
 receiveSingleFMsg (Socket sock) fls = do
-   -- TODO move this code in c interface
    ptR <- mallocForeignPtr :: IO (ForeignPtr (Ptr ())) -- any ptr TODO in api alloca or foreignfree
    let iovecR = NNFIoVec (castForeignPtr ptR) (fromIntegral nN_MSG)
    fnullPtr <- newForeignPtr finalizerFree nullPtr  
@@ -373,17 +359,21 @@ receiveSingleFMsg (Socket sock) fls = do
 -- It uses dynamic size messages
 receiveSingleMsg :: Receiver a => Socket a -> [Flag] -> IO (Either Error SingleMessage)
 receiveSingleMsg (Socket sock) fls = do
-   -- TODO move this code in c interface
-   ptR <- malloc :: IO (Ptr (Ptr ())) -- any ptr TODO in api alloca or foreignfree
-   let iovecR = NNIoVec (castPtr ptR) (fromIntegral nN_MSG)
-   iovecAR <- malloc :: IO (Ptr NNIoVec) -- only one element array
-   poke iovecAR iovecR
-   let msghdrRec = NNMsgHdr (castPtr iovecAR) 1 nullPtr 0
+   msghdrRec <- singleMsgInit Nothing
    sr <- nnRecvmsg sock msghdrRec fls
    case sr of 
     Left e  -> return $ Left e
     Right s -> return $ Right (SingleMessage msghdrRec s)
 
+singleMsgInit :: Maybe (Ptr ()) -> IO NNMsgHdr
+singleMsgInit mp = do
+   ptR <- malloc :: IO (Ptr (Ptr ()))
+   let iovecR = NNIoVec (castPtr ptR) (fromIntegral nN_MSG)
+   iovecAR <- malloc :: IO (Ptr NNIoVec) -- only one element array
+   poke iovecAR iovecR
+   maybe (return ()) (poke ptR) mp
+   return $ NNMsgHdr (castPtr iovecAR) 1 nullPtr 0
+ 
 -- | Receive a Message from the to socket. See official documentation nn_recvmsg(3)
 -- A list of size for each parts is used to allocate memory buffer.
 receiveMultiMsg :: Receiver a => Socket a -> [Flag] -> [Int] -> IO (Either Error MultiMessage)
@@ -446,41 +436,43 @@ newMultimessage' :: (Storable m) => [m] -> IO MultiMessage
 newMultimessage' ms = do
    let nbvec = length ms
    iovecR  <- mallocArray nbvec
-   iovecR' <- mapM (\s -> do
+   iovecR'  <- initMultimessage' ms
+   pokeArray iovecR iovecR'
+   return $ MultiMessage $ NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0
+
+initMultimessage' :: (Storable m) => [m] -> IO [NNIoVec]
+initMultimessage' = mapM (\s -> do
      p <- mallocArray $ sizeOf s
      poke p s
      return $ NNIoVec (castPtr p) $ fromIntegral $ sizeOf s
-     ) ms
-   pokeArray iovecR iovecR'
-   return $ MultiMessage $ NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0
+     )
+
+initMultifmessage' :: (Storable m) => [m] -> IO [NNFIoVec]
+initMultifmessage' = mapM (\s -> do
+     p <- mallocForeignPtrArray $ sizeOf s
+     withForeignPtr p (`poke` s)
+     return $ NNFIoVec (castForeignPtr p) $ fromIntegral $ sizeOf s
+     )
 
 newMultifmessage' :: (Storable m) => [m] -> IO MultiFMessage
 newMultifmessage' ms = do
    let nbvec = length ms
-   iovecR <- mapM (\s -> do
-     p <- mallocForeignPtrArray $ sizeOf s
-     withForeignPtr p (\p' -> poke p' s)
-     return $ NNFIoVec (castForeignPtr p) $ fromIntegral $ sizeOf s
-     ) ms
+   iovecR <- initMultifmessage' ms
    fnullPtr <- newForeignPtr finalizerFree nullPtr
    return $ MultiFMessage $ NNFMsgHdr iovecR (fromIntegral nbvec) fnullPtr 0
 
 -- | initiate singlepart message from a bytestring
 newSinglemessage :: ByteString -> IO (Either Error SingleMessage)
 newSinglemessage (PS pbs pof ple) = do
-   ptR <- malloc :: IO (Ptr (Ptr ()))
-   let iovecR = NNIoVec (castPtr ptR) (fromIntegral nN_MSG)
-   iovecAR <- malloc :: IO (Ptr NNIoVec) -- only one element array
-   poke iovecAR iovecR
    -- write bs in ptR
    let l = ple - pof
    p' <- nnAllocmsg l 0
    case p' of
      Left e -> return $ Left e
      Right p -> do
-       poke ptR p
+       msghdr <- singleMsgInit $ Just p
        withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs') l)
-       return $ Right $ SingleMessage (NNMsgHdr (castPtr iovecAR) 1 nullPtr 0) l
+       return $ Right $ SingleMessage msghdr l
 
 newSinglefmessage :: ByteString -> IO (Either Error SingleFMessage)
 newSinglefmessage (PS pbs pof ple) = do
@@ -496,24 +488,16 @@ newSinglefmessage (PS pbs pof ple) = do
        fnullPtr <- newForeignPtr finalizerFree nullPtr
        return $ Right $ SingleFMessage (NNFMsgHdr [iovecR] 1 fnullPtr 0) l
 
-
-
 newSinglemessage' :: (Storable m) => m -> IO (Either Error SingleMessage)
 newSinglemessage' m = do
-   ptR <- malloc :: IO (Ptr (Ptr ()))
-   let iovecR = NNIoVec (castPtr ptR) (fromIntegral nN_MSG)
-   iovecAR <- malloc :: IO (Ptr NNIoVec) -- only one element array
-   poke iovecAR iovecR
-   -- write bs in ptR
    let l = sizeOf m
    p' <- nnAllocmsg l 0
    case p' of
      Left e -> return $ Left e
      Right p -> do
-       poke ptR p
+       nnmsghdr <- singleMsgInit $ Just p
        poke (castPtr p) m
-       return $ Right $ SingleMessage (NNMsgHdr (castPtr iovecAR) 1 nullPtr 0) l
-
+       return $ Right $ SingleMessage nnmsghdr l
 
 newSinglefmessage' :: (Storable m) => m -> IO (Either Error SingleFMessage)
 newSinglefmessage' m = do
@@ -529,7 +513,6 @@ newSinglefmessage' m = do
        fnullPtr <- newForeignPtr finalizerFree nullPtr
        return $ Right $ SingleFMessage (NNFMsgHdr [iovecR] 1 fnullPtr 0) l
 
-
 -- | add message part
 -- It involves reallocating array memory so it should only
 -- be used for resending a message with extra information
@@ -544,23 +527,19 @@ addMultimessage bs (MultiMessage (NNMsgHdr vs vl cs cl)) = do
      withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs') (ple - pof))
      return $ NNIoVec p $ fromIntegral l'
      ) bs
-  pokeArray (nvs `plusPtr` (fromIntegral vl)) ios
+  pokeArray (nvs `plusPtr` fromIntegral vl) ios
   return $ MultiMessage $ NNMsgHdr nvs nvl cs cl
 
-addMultimessage' :: (Storable m) => [m] -> MultiMessage -> IO (MultiMessage)
+addMultimessage' :: (Storable m) => [m] -> MultiMessage -> IO MultiMessage
 addMultimessage' ms (MultiMessage (NNMsgHdr vs vl cs cl)) = do
   let l = length ms
   let nvl = vl + fromIntegral l
   nvs <- reallocArray vs l
-  ios <- mapM (\s -> do
-     p <- mallocArray $ sizeOf s
-     poke p s
-     return $ NNIoVec (castPtr p) $ fromIntegral $ sizeOf s
-     ) ms
+  ios <- initMultimessage' ms
   pokeArray (nvs `plusPtr` fromIntegral vl) ios
   return $ MultiMessage $ NNMsgHdr nvs nvl cs cl
 
-addMultifmessage :: [ByteString] -> MultiFMessage -> IO (MultiFMessage)
+addMultifmessage :: [ByteString] -> MultiFMessage -> IO MultiFMessage
 addMultifmessage bs (MultiFMessage (NNFMsgHdr vs vl cs cl)) = do
   let l = length bs
   let nvl = vl + fromIntegral l
@@ -576,14 +555,8 @@ addMultifmessage' :: (Storable m) => [m] -> MultiFMessage -> IO MultiFMessage
 addMultifmessage' ms (MultiFMessage (NNFMsgHdr vs vl cs cl)) = do
   let l = length ms
   let nvl = vl + fromIntegral l
-  nvs <- mapM (\s -> do
-     p <- mallocForeignPtrArray $ sizeOf s
-     withForeignPtr p (\p' -> poke p' s)
-     return $ NNFIoVec (castForeignPtr p) $ fromIntegral $ sizeOf s
-     ) ms
+  nvs <- initMultifmessage' ms
   return $ MultiFMessage $ NNFMsgHdr (vs ++ nvs) nvl cs cl
-
-
 
 -- | Finalizer for Message.
 freeMsg :: Message b => b -> IO () -- TODO a with for bracketing
@@ -605,34 +578,33 @@ forceTerm :: IO()
 forceTerm = nnTerm
 
 getEnumOption :: (AllSocketOptions a, AllLevelOptions b, Enum e) => Socket s -> b -> a -> IO (Either Error e)
-getEnumOption a b c = (return . fmap cIntToEnum) =<< getCIntOption a b c -- TODO find nicer syntax
+getEnumOption a b c = (return . fmap toEnum) =<< getIntOption a b c -- TODO find nicer syntax
  
-getCIntOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> IO (Either Error CInt)
-getCIntOption (Socket sock) level option = do
+getIntOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> IO (Either Error Int)
+getIntOption (Socket sock) level option = do
    let cintsize = sizeOf (undefined :: CInt)
    (err, val, _) <- allocaBytes cintsize (\p -> nnGetsockopt sock level option p cintsize)
    case err of
      Just e -> return $ Left e
      Nothing -> do
        v <- peek (castPtr val :: Ptr CInt)
-       return $ Right v
+       return $ Right (fromIntegral v)
  
-setCIntOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> CInt -> IO (Maybe Error)
-setCIntOption (Socket s) b a v = alloca (\p -> poke p v >> nnSetsockopt s b a (castPtr p) (sizeOf v))
-  
-getCStringOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> IO (Either Error String)
-getCStringOption (Socket sock) level option = do
+setIntOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> Int -> IO (Maybe Error)
+setIntOption (Socket s) b a v = alloca (\p -> poke p (fromIntegral v :: CInt) >> nnSetsockopt s b a (castPtr p) (sizeOf v))
+ 
+getStringOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> IO (Either Error String)
+getStringOption (Socket sock) level option = do
    let cintsize = sizeOf (undefined :: CInt)
    (err, val, size) <- allocaBytes cintsize (\p -> nnGetsockopt sock level option p cintsize)
    case err of
      Just e -> return $ Left e
      Nothing -> do
-       v <- peekCStringLen ((castPtr val), size)
+       v <- peekCStringLen (castPtr val, size)
        return $ Right v
- 
 
-setCStringOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> String -> IO (Maybe Error)
-setCStringOption (Socket s) b a v = withCString v (\cs -> nnSetsockopt s b a (castPtr cs) (sizeOf cs))
+setStringOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> String -> IO (Maybe Error)
+setStringOption (Socket s) b a v = withCString v (\cs -> nnSetsockopt s b a (castPtr cs) (sizeOf cs))
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getDomain :: Socket s -> IO (Either Error AddressFamilies)
@@ -644,113 +616,106 @@ getProtocol s = getEnumOption s NN_SOL_SOCKET NN_PROTOCOL
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getLinger :: Socket s -> IO (Either Error Int)
-getLinger s = (return . fmap fromIntegral) =<< getCIntOption s NN_SOL_SOCKET NN_LINGER
+getLinger s = getIntOption s NN_SOL_SOCKET NN_LINGER
 
 -- | Please refer to nn_setsockopt(3) Manual Page
 setLinger :: Socket s -> Int -> IO (Maybe Error)
-setLinger s v = setCIntOption s NN_SOL_SOCKET NN_LINGER (fromIntegral v)
+setLinger s = setIntOption s NN_SOL_SOCKET NN_LINGER
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getSendBuffer :: (Sender s) => Socket s -> IO (Either Error Int)
-getSendBuffer s = (return . fmap fromIntegral) =<< getCIntOption s NN_SOL_SOCKET NN_SNDBUF
+getSendBuffer s = getIntOption s NN_SOL_SOCKET NN_SNDBUF
 
 -- | Please refer to nn_setsockopt(3) Manual Page
 setSendBuffer :: (Sender s) => Socket s -> Int -> IO (Maybe Error)
-setSendBuffer s v = setCIntOption s NN_SOL_SOCKET NN_SNDBUF (fromIntegral v)
+setSendBuffer s = setIntOption s NN_SOL_SOCKET NN_SNDBUF
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getReceiveBuffer :: (Receiver s) => Socket s -> IO (Either Error Int)
-getReceiveBuffer s = (return . fmap fromIntegral) =<< getCIntOption s NN_SOL_SOCKET NN_RCVBUF
+getReceiveBuffer s = getIntOption s NN_SOL_SOCKET NN_RCVBUF
 
 -- | Please refer to nn_setsockopt(3) Manual Page
 setReceiveBuffer :: (Receiver s) => Socket s -> Int -> IO (Maybe Error)
-setReceiveBuffer s v = setCIntOption s NN_SOL_SOCKET NN_RCVBUF (fromIntegral v)
+setReceiveBuffer s = setIntOption s NN_SOL_SOCKET NN_RCVBUF
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getSendTimeout :: (Sender s) => Socket s -> IO (Either Error Int)
-getSendTimeout s = (return . fmap fromIntegral) =<< getCIntOption s NN_SOL_SOCKET NN_SNDTIMEO
+getSendTimeout s = getIntOption s NN_SOL_SOCKET NN_SNDTIMEO
 
 -- | Please refer to nn_setsockopt(3) Manual Page
 setSendTimeout :: (Sender s) => Socket s -> Int -> IO (Maybe Error)
-setSendTimeout s v = setCIntOption s NN_SOL_SOCKET NN_SNDTIMEO (fromIntegral v)
+setSendTimeout s = setIntOption s NN_SOL_SOCKET NN_SNDTIMEO
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getReceiveTimeout :: (Receiver s) => Socket s -> IO (Either Error Int)
-getReceiveTimeout s = (return . fmap fromIntegral) =<< getCIntOption s NN_SOL_SOCKET NN_RCVTIMEO
+getReceiveTimeout s = getIntOption s NN_SOL_SOCKET NN_RCVTIMEO
 
 -- | Please refer to nn_setsockopt(3) Manual Page
 setReceiveTimeout :: (Receiver s) => Socket s -> Int -> IO (Maybe Error)
-setReceiveTimeout s v = setCIntOption s NN_SOL_SOCKET NN_RCVTIMEO (fromIntegral v)
-
+setReceiveTimeout s = setIntOption s NN_SOL_SOCKET NN_RCVTIMEO
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getReconnectInterval :: Socket s -> IO (Either Error Int)
-getReconnectInterval s = (return . fmap fromIntegral) =<< getCIntOption s NN_SOL_SOCKET NN_RECONNECT_IVL
+getReconnectInterval s = getIntOption s NN_SOL_SOCKET NN_RECONNECT_IVL
 
 -- | Please refer to nn_setsockopt(3) Manual Page
 setReconnectInterval :: Socket s -> Int -> IO (Maybe Error)
-setReconnectInterval s v = setCIntOption s NN_SOL_SOCKET NN_RECONNECT_IVL (fromIntegral v)
+setReconnectInterval s = setIntOption s NN_SOL_SOCKET NN_RECONNECT_IVL
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getReconnectIntervalMax :: Socket s -> IO (Either Error Int)
-getReconnectIntervalMax s = (return . fmap fromIntegral) =<< getCIntOption s NN_SOL_SOCKET NN_RECONNECT_IVL_MAX
+getReconnectIntervalMax s = getIntOption s NN_SOL_SOCKET NN_RECONNECT_IVL_MAX
 
 -- | Please refer to nn_setsockopt(3) Manual Page
 setReconnectIntervalMax :: Socket s -> Int -> IO (Maybe Error)
-setReconnectIntervalMax s v = setCIntOption s NN_SOL_SOCKET NN_RECONNECT_IVL_MAX (fromIntegral v)
+setReconnectIntervalMax s = setIntOption s NN_SOL_SOCKET NN_RECONNECT_IVL_MAX
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getSendPrio :: (Sender s) => Socket s -> IO (Either Error Int)
-getSendPrio s = (return . fmap fromIntegral) =<< getCIntOption s NN_SOL_SOCKET NN_SNDPRIO
+getSendPrio s = getIntOption s NN_SOL_SOCKET NN_SNDPRIO
 
 -- | Please refer to nn_setsockopt(3) Manual Page
 setSendPrio :: (Sender s) => Socket s -> Int -> IO (Maybe Error)
-setSendPrio s v = setCIntOption s NN_SOL_SOCKET NN_SNDPRIO (fromIntegral v)
+setSendPrio s = setIntOption s NN_SOL_SOCKET NN_SNDPRIO
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 getIPV4ONLY :: Socket s -> IO (Either Error Bool)
-getIPV4ONLY s = (return . fmap (toEnum . fromIntegral)) =<< getCIntOption s NN_SOL_SOCKET NN_IPV4ONLY
+getIPV4ONLY s = (return . fmap toEnum) =<< getIntOption s NN_SOL_SOCKET NN_IPV4ONLY
 
 -- | Please refer to nn_setsockopt(3) Manual Page
 setIPV4ONLY :: Socket s -> Bool -> IO (Maybe Error)
-setIPV4ONLY s v = setCIntOption s NN_SOL_SOCKET NN_IPV4ONLY $ (fromIntegral . fromEnum) v
+setIPV4ONLY s v = setIntOption s NN_SOL_SOCKET NN_IPV4ONLY $ fromEnum v
 
 -- | Please refer to nn_reqrep(7) Manual Page
-getReqResendInterval :: Socket Req -> IO (Either Error Bool)
-getReqResendInterval s = (return . fmap (toEnum . fromIntegral)) =<< getCIntOption s  NN_REQ NN_REQ_RESEND_IVL
+getReqResendInterval :: Socket Req -> IO (Either Error Int)
+getReqResendInterval s = getIntOption s NN_REQ NN_REQ_RESEND_IVL
 
 -- | Please refer to nn_reqrep(7) Manual Page
 setReqResendInterval :: Socket Req -> Int -> IO (Maybe Error)
-setReqResendInterval s v = setCIntOption s NN_REQ NN_REQ_RESEND_IVL (fromIntegral v)
+setReqResendInterval s = setIntOption s NN_REQ NN_REQ_RESEND_IVL
 
 -- | Please refer to nn_pubsub(7) Manual Page
 getSubSubscribe :: Socket Req -> IO (Either Error String)
-getSubSubscribe s = getCStringOption s  NN_SUB NN_SUB_SUBSCRIBE
+getSubSubscribe s = getStringOption s NN_SUB NN_SUB_SUBSCRIBE
 
 -- | Please refer to nn_pubsub(7) Manual Page
 setSubSubscribe :: Socket Sub -> String -> IO (Maybe Error)
-setSubSubscribe s v = setCStringOption s NN_SUB NN_SUB_SUBSCRIBE v
+setSubSubscribe s = setStringOption s NN_SUB NN_SUB_SUBSCRIBE
 
 -- | Please refer to nn_pubsub(7) Manual Page
 getSubUnsubscribe :: Socket Req -> IO (Either Error String)
-getSubUnsubscribe s = getCStringOption s  NN_SUB NN_SUB_UNSUBSCRIBE
+getSubUnsubscribe s = getStringOption s NN_SUB NN_SUB_UNSUBSCRIBE
 
 -- | Please refer to nn_pubsub(7) Manual Page
 setSubUnsubscribe :: Socket Sub -> String -> IO (Maybe Error)
-setSubUnsubscribe s v = setCStringOption s NN_SUB NN_SUB_UNSUBSCRIBE v
-
+setSubUnsubscribe s = setStringOption s NN_SUB NN_SUB_UNSUBSCRIBE
 
 -- | Please refer to nn_survey(7) Manual Page
-getSurveyorDeadline :: Socket Surveyor -> IO (Either Error Bool)
-getSurveyorDeadline s = (return . fmap (toEnum . fromIntegral)) =<< getCIntOption s  NN_SURVEYOR NN_SURVEYOR_DEADLINE 
+getSurveyorDeadline :: Socket Surveyor -> IO (Either Error Int)
+getSurveyorDeadline s = getIntOption s  NN_SURVEYOR NN_SURVEYOR_DEADLINE 
 
 -- | Please refer to nn_survey(7) Manual Page
 setSurveyorDeadline :: Socket Surveyor -> Int -> IO (Maybe Error)
-setSurveyorDeadline s v = setCIntOption s NN_SURVEYOR NN_SURVEYOR_DEADLINE (fromIntegral v)
+setSurveyorDeadline s = setIntOption s NN_SURVEYOR NN_SURVEYOR_DEADLINE
 
-{-
-
-
-    This option is defined on the full REQ socket. If reply is not received in specified amount of milliseconds, the request will be automatically resent. The type of this option is int. Default value is 60000 (1 minute).
--}
 
