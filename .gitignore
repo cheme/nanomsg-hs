@@ -14,4 +14,9 @@ tags
 *.chs.h
 System/NanoMsg/C/NanoMsg.hs
 System/NanoMsg/C/NanoMsgStruct.hs
+example/clonecli1
+example/clonecli2
+example/clonesrv1
+example/clonesrv2
+example/clonetest*
 

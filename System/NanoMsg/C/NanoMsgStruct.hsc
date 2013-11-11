@@ -18,6 +18,10 @@ foreign import ccall "System/NanoMsg/C/NanoMsg.chs.h &nn_freemsg"
 nN_MSG :: CInt
 nN_MSG = #const NN_MSG
 
+nN_DONTWAIT :: CInt
+nN_DONTWAIT = #const NN_DONTWAIT
+
+
 data NNIoVec = NNIoVec
   { iobase :: {-# UNPACK #-} !CString
   , ioleng :: {-# UNPACK #-} !CSize

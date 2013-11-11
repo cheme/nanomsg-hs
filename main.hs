@@ -20,6 +20,7 @@ import qualified Data.ByteString as BS
 import Data.ByteString.Internal(ByteString(PS))
 import Data.List(foldl')
 import Control.Monad(foldM_)
+import qualified System.NanoMsg as N
 main :: IO ()
 main = do
 
@@ -28,6 +29,46 @@ main = do
    -- parameter handling
  case args of 
   [host, port] -> do
+   sockpair1 <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
+   nnBind sockpair1 "inproc://tsest"
+--   nnConnect sockpair1 "tcp://127.0.0.1:5556"
+ 
+   let m = "Hello wordk" :: String
+   let l = length m
+   p <- nnAllocmsg l 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
+   p <- getEr p
+   foldM_  (\a c -> pokeByteOff p a c >> return (a + 1)) 0 m
+   m' <- peekCString (castPtr p)
+--   r  <- nnSendDyn sockpair2 (castPtr p) [] -- TODO bracket it ??
+ --  si <- getEr r
+ --  case r of Left _ -> nnFreemsg p
+ --            Right _ -> return Nothing
+ 
+   putStrLn "12"
+--   (sr, v) <- nnRecvDyn' sockpair1 []
+--   si1 <- getEr sr
+--   r1 <- peekCStringLen ((castPtr v),  si1)
+--   putStrLn r1
+   putStrLn "tsrtr"
+   sockpair2 <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
+   let m2 = "Hello word2k" :: String
+   let l2 = length m2
+   p2 <- nnAllocmsg (l2) 0 -- TODO link on bytestring to do unsafe zero copy -- here does not make sense
+   p2 <- getEr p2
+   foldM_  (\a c -> pokeByteOff p2 a c >> return (a + 1)) 0 m2
+   r <- nnSendDyn sockpair2 (castPtr p2) []
+   si <- getEr r
+   case r of Left _ -> nnFreemsg p2
+             Right _ -> return Nothing
+   (sr, v) <- nnRecvDyn sockpair1 []
+   si2 <- getEr sr
+   r2 <- withForeignPtr (castForeignPtr v) (\p' ->  peekCStringLen (p',  si2))
+ 
+
+   updates <- nnSocket AF_SP NN_PAIR >>= getEr
+   nnBind updates "inproc://test12"
+   (sr , v ) <- nnRecvDyn updates []
+   putStrLn $ show sr
    putStrLn "* Test nn_socket"
    xsocksurveyor <- nnSocket AF_SP_RAW NN_SURVEYOR >>= getEr -- ok
    xsockrespondent <- nnSocket AF_SP_RAW NN_RESPONDENT >>= getEr -- ok

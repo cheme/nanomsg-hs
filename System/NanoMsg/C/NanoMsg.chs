@@ -12,6 +12,8 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString.Unsafe as U
 import qualified Data.List as L
+import System.Posix.Types(Fd)
+import Control.Concurrent(threadWaitWrite,threadWaitRead)
 
 #include "nanomsg/nn.h"
 #include "nanomsg/pair.h"
@@ -153,7 +155,7 @@ endPointToCInt (NnEndPoint s) = s
 
 
 -- | internal only
-class (Enum a) => AllSocketOptions a
+class (Enum a, Show a, Eq a) => AllSocketOptions a
 instance AllSocketOptions ReqRepOptions
 instance AllSocketOptions SurveyOptions
 instance AllSocketOptions PubSubOptions
@@ -161,7 +163,7 @@ instance AllSocketOptions SocketOptions
 instance AllSocketOptions TcpOptions
 instance AllSocketOptions SocketReadOptions
 -- | internal only
-class (Enum a) => AllLevelOptions a
+class (Enum a, Show a, Eq a) => AllLevelOptions a
 instance AllLevelOptions NnProtocol
 instance AllLevelOptions SolSocket
 instance AllLevelOptions NnTransport
@@ -174,6 +176,13 @@ instance AllLevelOptions NnTransport
 
 flagsToCInt :: Enum a => [a] -> CInt
 flagsToCInt b = L.foldl' (\ac en -> ac + cIntFromEnum en ) 0  b
+
+rFlagsToCInt :: Enum a => [a] -> (CInt,Bool)
+rFlagsToCInt b = let f = L.foldl' (\ac en -> ac + cIntFromEnum en ) 0  b in
+                 if (nN_DONTWAIT .&. f) == 0 then (nN_DONTWAIT `xor` f, True) else (f, False)
+
+sFlagsToCInt :: Enum a => [a] -> (CInt,Bool)
+sFlagsToCInt = rFlagsToCInt
 
 cIntToEnum :: Enum a => CInt -> a
 cIntToEnum = toEnum . fromIntegral
@@ -303,28 +312,204 @@ withNullPtr r = r nullPtr
 
 {#fun unsafe nn_shutdown as ^ {socketToCInt `NnSocket', endPointToCInt `NnEndPoint'} -> `Maybe NnError' errorFromRetCode* #}
 
--- | type to send not in C (not even storable) 
-{#fun  nn_send as ^ {socketToCInt `NnSocket', withForeignPtr* `ForeignPtr ()', fromIntegral `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+-- All recv functions are derived from C2hs generation to enforce nn_dont_wait and depending on set flags wait in haskell (issue with poll c function when using ffi). Normal c2hs receive are kept postfixed B (as Bogus).
+{#fun unsafe nn_recv as nnRecvDynB' {socketToCInt `NnSocket', withNullPPtr- `Ptr ()' pVoid*,  withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun unsafe nn_recv as nnRecvDynB {socketToCInt `NnSocket', withNullPPtr- `ForeignPtr ()' foreignPMsg*,  withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+-- TODO fn with foreign does not make too much sense (should be in api)
+{#fun unsafe nn_recv as nnRecvB {socketToCInt `NnSocket', withForeignPtr* `ForeignPtr ()', fromIntegral `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun unsafe nn_recv as nnRecvB' {socketToCInt `NnSocket', id `Ptr ()', fromIntegral `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+
+{#fun unsafe nn_recvmsg as nn_recvmsgB {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun unsafe nn_recvmsg as nnRecvfmsgB {socketToCInt `NnSocket', fromFMsgHdr* `NNFMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
+  nn_recv_c :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_recvmsg"
+  nn_recvmsg_c :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
+
+pollRecFd :: Bool -> CInt -> Ptr () -> CULong -> CInt -> IO CInt
+pollRecFd True s ptr psize fls = do
+  res <- nn_recv_c s ptr psize fls
+  if res == (-1) then do
+    err <- nnErrno
+    if err == EAGAIN then do
+      getFd NN_RCVFD s >>= threadWaitRead >> pollRecFd True s ptr psize fls
+    else return res
+  else return res
+pollRecFd False s ptr psize fls = nn_recv_c s ptr psize fls
+pollRecFdMsg :: Bool -> CInt -> Ptr () -> CInt -> IO CInt
+pollRecFdMsg True s ptr fls = do
+  res <- nn_recvmsg_c s ptr fls
+  if res == (-1) then do
+    err <- nnErrno
+    if err == EAGAIN then do
+      getFd NN_RCVFD s >>= threadWaitRead >> pollRecFdMsg True s ptr fls 
+    else return res
+  else return res
+pollRecFdMsg False s ptr fls = nn_recvmsg_c s ptr fls
+
+pollSndFd :: Bool -> CInt -> Ptr () -> CULong -> CInt -> IO CInt
+pollSndFd True s ptr psize fls = do
+  res <- nn_send_c s ptr psize fls
+  if res == (-1) then do
+    err <- nnErrno
+    if err == EAGAIN then do
+      getFd NN_SNDFD s >>= threadWaitWrite >> pollSndFd True s ptr psize fls
+    else return res
+  else return res
+pollSndFd False s ptr psize fls = nn_send_c s ptr psize fls
+
+pollSndFdMsg :: Bool -> CInt -> Ptr () -> CInt -> IO CInt
+pollSndFdMsg True s ptr fls = do
+  res <- nn_sendmsg_c s ptr fls
+  if res == (-1) then do
+    err <- nnErrno
+    if err == EAGAIN then do
+      getFd NN_SNDFD s >>= threadWaitWrite >> pollSndFdMsg True s ptr fls
+    else return res
+  else return res
+pollSndFdMsg False s ptr fls = nn_sendmsg_c s ptr fls
+
+
+-- TODO manage error (no fd result from getOption)
+getFd :: (Enum c) => c -> CInt -> IO Fd
+getFd f s = 
+  let sol = cIntFromEnum NN_SOL_SOCKET
+      fdo = cIntFromEnum f 
+      fdSize = fromIntegral $ sizeOf (undefined :: Fd) in
+    alloca $ \ptr ->
+      alloca $ \psize -> do
+        poke psize fdSize
+        size <- nnGetsockopt'_ s sol fdo (castPtr (ptr :: Ptr Fd)) psize
+        peek ptr
+
+-- boileplate copy from c2hs generated code to include test on dont wait and haskell polling of file descriptor
+nnRecvDyn' :: (NnSocket) -> ([SndRcvFlags]) -> IO ((Either NnError Int), (Ptr ()))
+nnRecvDyn' soc fls =
+  let s = socketToCInt soc in 
+  withNullPPtr $ \nulptr -> 
+  withNnMSG $ \size -> 
+  let {(f,w) = rFlagsToCInt fls} in 
+  pollRecFd w s nulptr size f >>= \res ->
+  errorFromLength res >>= \res' ->
+  pVoid  nulptr>>= \a2'' -> 
+  return (res', a2'')
+nnRecvDyn :: (NnSocket) -> ([SndRcvFlags]) -> IO ((Either NnError Int), (ForeignPtr ()))
+nnRecvDyn a1 a4 =
+  let {a1' = socketToCInt a1} in 
+  withNullPPtr $ \a2' -> 
+  withNnMSG $ \a3' -> 
+  let {(a4',w) = rFlagsToCInt a4} in 
+  pollRecFd w a1' a2' a3' a4' >>= \res ->
+  errorFromLength res >>= \res' ->
+  foreignPMsg  a2'>>= \a2'' -> 
+  return (res', a2'')
+nnRecv :: (NnSocket) -> (ForeignPtr ()) -> (Int) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
+nnRecv a1 a2 a3 a4 =
+  let {a1' = socketToCInt a1} in 
+  withForeignPtr a2 $ \a2' -> 
+  let {a3' = fromIntegral a3} in 
+  let {(a4',w) = rFlagsToCInt a4} in 
+  pollRecFd w a1' a2' a3' a4' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+
+nnRecv' :: (NnSocket) -> (Ptr ()) -> (Int) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
+nnRecv' a1 a2 a3 a4 =
+  let {a1' = socketToCInt a1} in 
+  let {a2' = id a2} in 
+  let {a3' = fromIntegral a3} in 
+  let {(a4',w) = rFlagsToCInt a4} in 
+  pollRecFd w a1' a2' a3' a4' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+
+nnRecvmsg :: (NnSocket) -> (NNMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
+nnRecvmsg a1 a2 a3 =
+  let {a1' = socketToCInt a1} in 
+  fromMsgHdr a2 $ \a2' -> 
+  let {(a3',w) = rFlagsToCInt a3} in 
+  pollRecFdMsg w a1' a2' a3' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+
+nnRecvfmsg :: (NnSocket) -> (NNFMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
+nnRecvfmsg a1 a2 a3 =
+  let {a1' = socketToCInt a1} in 
+  fromFMsgHdr a2 $ \a2' -> 
+  let {(a3',w) = rFlagsToCInt a3} in 
+  pollRecFdMsg w a1' a2' a3' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+
+
+-- | type to send not in C (not even storable)
+{#fun unsafe nn_send as nnSendB {socketToCInt `NnSocket', withForeignPtr* `ForeignPtr ()', fromIntegral `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 -- | not ForeignFree
-{#fun  nn_send as nnSend' {socketToCInt `NnSocket', id `Ptr ()', fromIntegral `Int',flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun unsafe nn_send as nnSendB' {socketToCInt `NnSocket', id `Ptr ()', fromIntegral `Int',flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 -- | no foreign (deallocate is managed by nanomq)
-{#fun  nn_send as nnSendDyn {socketToCInt `NnSocket', withPPtr* `Ptr ()', withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun unsafe nn_send as nnSendDynB {socketToCInt `NnSocket', withPPtr* `Ptr ()', withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 --{#fun unsafe nn_send as nnSendDyn {socketToCInt `NnSocket', withPForeign* `ForeignPtr ()', withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #} -- Do no send with foreing free pointer because nn deallocate
 
--- TODO fn with foreign does not make too much sense (should be in api)
-{#fun nn_recv as nnRecvDyn' {socketToCInt `NnSocket', withNullPPtr- `Ptr ()' pVoid*,  withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
-{#fun  nn_recv as nnRecvDyn {socketToCInt `NnSocket', withNullPPtr- `ForeignPtr ()' foreignPMsg*,  withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun unsafe nn_sendmsg as nnSendmsgB {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+{#fun unsafe nn_sendmsg as nnSendfmsgB {socketToCInt `NnSocket', fromFMsgHdr* `NNFMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
 
--- TODO fn with foreign does not make too much sense (should be in api)
-{#fun  nn_recv as ^ {socketToCInt `NnSocket', withForeignPtr* `ForeignPtr ()', fromIntegral `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
-{#fun  nn_recv as nnRecv' {socketToCInt `NnSocket', id `Ptr ()', fromIntegral `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_send"
+  nn_send_c :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
+
+foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_sendmsg"
+  nn_sendmsg_c :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
 
 
-{#fun unsafe nn_sendmsg as ^ {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
-{#fun unsafe nn_sendmsg as nnSendfmsg {socketToCInt `NnSocket', fromFMsgHdr* `NNFMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
-
-{#fun nn_recvmsg as ^ {socketToCInt `NnSocket', fromMsgHdr* `NNMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
-{#fun nn_recvmsg as nnRecvfmsg {socketToCInt `NnSocket', fromFMsgHdr* `NNFMsgHdr', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #}
+-- same as with receive (issue with poll)
+-- | type to send not in C (not even storable) 
+nnSend :: (NnSocket) -> (ForeignPtr ()) -> (Int) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
+nnSend a1 a2 a3 a4 =
+  let {a1' = socketToCInt a1} in 
+  withForeignPtr a2 $ \a2' -> 
+  let {a3' = fromIntegral a3} in 
+  let {(a4',w) = sFlagsToCInt a4} in 
+  pollSndFd w a1' a2' a3' a4' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+-- | not ForeignFree
+nnSend' :: (NnSocket) -> (Ptr ()) -> (Int) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
+nnSend' a1 a2 a3 a4 =
+  let {a1' = socketToCInt a1} in 
+  let {a2' = id a2} in 
+  let {a3' = fromIntegral a3} in 
+  let {(a4',w) = sFlagsToCInt a4} in 
+  pollSndFd w a1' a2' a3' a4' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+{-# LINE 315 "System/NanoMsg/C/NanoMsg.chs" #-}
+-- | no foreign (deallocate is managed by nanomq)
+nnSendDyn :: (NnSocket) -> (Ptr ()) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
+nnSendDyn a1 a2 a4 =
+  let {a1' = socketToCInt a1} in 
+  withPPtr a2 $ \a2' -> 
+  withNnMSG $ \a3' -> 
+  let {(a4',w) = sFlagsToCInt a4} in 
+  pollSndFd w a1' a2' a3' a4' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+nnSendmsg :: (NnSocket) -> (NNMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
+nnSendmsg a1 a2 a3 =
+  let {a1' = socketToCInt a1} in 
+  fromMsgHdr a2 $ \a2' -> 
+  let {(a3',w) = sFlagsToCInt a3} in 
+  pollSndFdMsg w a1' a2' a3' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
+nnSendfmsg :: (NnSocket) -> (NNFMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
+nnSendfmsg a1 a2 a3 =
+  let {a1' = socketToCInt a1} in 
+  fromFMsgHdr a2 $ \a2' -> 
+  let {(a3',w) = sFlagsToCInt a3} in 
+  pollSndFdMsg w a1' a2' a3' >>= \res ->
+  errorFromLength res >>= \res' ->
+  return (res')
 
 withFmsghdr :: ForeignPtr a -> (Ptr c -> IO b) -> IO b
 withFmsghdr f r =  withForeignPtr f (r . castPtr)

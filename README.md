@@ -30,7 +30,6 @@ Roadmap
 -------
 
 Next evolutions, could be:
-- use of exception for all error returning in API
 - non blocking send and receive due if issue with threads
 - rewritting of c2hs content to remove build dependency
 

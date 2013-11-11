@@ -10,6 +10,7 @@ import Control.Applicative((<$>))
 import Control.Concurrent.MVar(newEmptyMVar,putMVar,takeMVar)
 import Control.Concurrent(forkIO)
 import Control.Monad(forM_)
+import Control.Concurrent(threadDelay)
 
 -- instance Arbitrary Socket a where
 --   arbitrary = t
@@ -25,17 +26,18 @@ instance Arbitrary ByteString where
 prop_send_receive :: (SocketType a, SocketType b, Receiver b, Sender a) => a -> b -> ByteString -> Property
 prop_send_receive a b msg = monadicIO $ do
   msg' <- run $ do
-    sender <- socket a >>= getEr
-    receiver <- socket b >>= getEr
+    sender <- socket a
+    receiver <- socket b
     sync <- newEmptyMVar
-    epre <- bind receiver "inproc://endpoint" >>= getEr
-    forkIO $ receive receiver [] >>= getEr >>= putMVar sync
-    esen <- connect sender "inproc://endpoint" >>= getEr
+    epre <- bind receiver "inproc://endpoint"
+    esen <- connect sender "inproc://endpoint"
+    threadDelay 1000
+    forkIO $ receive receiver [] >>= putMVar sync
     send sender [] msg
     m <- takeMVar sync
-    --shutdown esen
+    shutdown esen
     close sender
-    --shutdown epre
+    shutdown epre
     close receiver
     return m
   assert (msg == msg')
@@ -45,14 +47,5 @@ tests :: Args -> [(String, Property)] -> IO ()
 tests args testlist = forM_ testlist $ \(title,prop) -> do
   putStrLn $ "* Checking : " ++ title
   quickCheckWith args prop
-
-getEr (Left a) = showEr a >> return undefined
-getEr (Right b) = return b
-getErr (Just a) = showEr a
-getErr Nothing = return ()
-showEr i = do
-  label <- nnStrerror i
-  putStrLn $ "Error " ++ show i ++ " = " ++ label
- 
 
 
