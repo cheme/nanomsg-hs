@@ -8,6 +8,7 @@ main :: IO ()
 main = do 
   tests stdArgs{maxSuccess=50} [
     ("Send/Receive", property $ prop_send_receive Req Rep)
+    , ("Get/SetOptions", property $ prop_set_get_options)
     ]
   testNnSocket >>= runTestTT
   testNnClose  >>= runTestTT

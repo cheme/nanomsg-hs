@@ -615,7 +615,7 @@ getIntOption (Socket sock) level option = do
  
 -- Throws NanoError
 setIntOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> Int -> IO ()
-setIntOption (Socket s) b a v = alloca (\p -> poke p (fromIntegral v :: CInt) >> nnSetsockopt s b a (castPtr p) (sizeOf v)) >>= maybeError ("setIntOption " ++ show b ++ " " ++ show a)
+setIntOption (Socket s) b a v = alloca (\p -> poke p (fromIntegral v :: CInt) >> nnSetsockopt s b a (castPtr p) (sizeOf (undefined :: CInt))) >>= maybeError ("setIntOption " ++ show b ++ " " ++ show a ++ " " ++ show v)
 
 -- Throws NanoError
 getStringOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> IO String
@@ -627,7 +627,7 @@ getStringOption (Socket sock) level option = do
 
 -- Throws NanoError
 setStringOption :: (AllSocketOptions a, AllLevelOptions b) => Socket s -> b -> a -> String -> IO ()
-setStringOption (Socket s) b a v = withCStringLen v (\(cs,l) -> nnSetsockopt s b a (castPtr cs) l) >>= maybeError ("setStringOption " ++ show b ++ " " ++ show a)
+setStringOption (Socket s) b a v = withCStringLen v (\(cs,l) -> nnSetsockopt s b a (castPtr cs) l) >>= maybeError ("setStringOption " ++ show b ++ " " ++ show a ++ " " ++ show v)
 
 -- | Please refer to nn_getsockopt(3) Manual Page
 -- Throws NanoError
@@ -740,8 +740,9 @@ setReqResendInterval :: Socket Req -> Int -> IO ()
 setReqResendInterval s = setIntOption s NN_REQ NN_REQ_RESEND_IVL
 
 -- | Please refer to nn_pubsub(7) Manual Page
+-- Note at this time (nanomsg alpha), not implemented in C api
 -- Throws NanoError
-getSubSubscribe :: Socket Req -> IO String
+getSubSubscribe :: Socket Sub -> IO String
 getSubSubscribe s = getStringOption s NN_SUB NN_SUB_SUBSCRIBE
 
 -- | Please refer to nn_pubsub(7) Manual Page
@@ -750,8 +751,9 @@ setSubSubscribe :: Socket Sub -> String -> IO ()
 setSubSubscribe s = setStringOption s NN_SUB NN_SUB_SUBSCRIBE
 
 -- | Please refer to nn_pubsub(7) Manual Page
+-- Note at this time (nanomsg alpha), not implemented in C api
 -- Throws NanoError
-getSubUnsubscribe :: Socket Req -> IO String
+getSubUnsubscribe :: Socket Sub -> IO String
 getSubUnsubscribe s = getStringOption s NN_SUB NN_SUB_UNSUBSCRIBE
 
 -- | Please refer to nn_pubsub(7) Manual Page

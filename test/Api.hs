@@ -11,6 +11,8 @@ import Control.Concurrent.MVar(newEmptyMVar,putMVar,takeMVar)
 import Control.Concurrent(forkIO)
 import Control.Monad(forM_)
 import Control.Concurrent(threadDelay)
+import Foreign.C.Types(CInt)
+import Foreign.Storable(sizeOf)
 
 -- instance Arbitrary Socket a where
 --   arbitrary = t
@@ -42,6 +44,23 @@ prop_send_receive a b msg = monadicIO $ do
     return m
   assert (msg == msg')
 
+-- TODO API shall need a socket type related options, plus some restricted int types
+prop_set_get_options :: String -> Bool -> Positive Int -> Property
+prop_set_get_options string bool (Positive int) = monadicIO $ do
+  (bool', string', int') <- run $ do
+    sock <- socket Sub
+    setIPV4ONLY sock bool
+    bool' <- getIPV4ONLY sock
+    -- dirty
+    int' <- if int < sizeOf (undefined :: CInt) `div` 2 then do 
+      setReceiveBuffer sock int
+      getReceiveBuffer sock else
+      return int -- skip test very dirty
+    setSubSubscribe sock string
+--    string' <- getSubSubscribe sock -- not yet implemented
+    return (bool',string,int')
+  assert (bool == bool && string == string' && int == int')
+ 
 
 tests :: Args -> [(String, Property)] -> IO ()
 tests args testlist = forM_ testlist $ \(title,prop) -> do

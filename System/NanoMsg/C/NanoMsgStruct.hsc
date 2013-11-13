@@ -61,7 +61,7 @@ instance Storable NNFIoVec where
 data NNMsgHdr = NNMsgHdr
   { msgvecs :: {-# UNPACK #-} !(Ptr NNIoVec)
   , msglvec :: {-# UNPACK #-} !CInt
-  , msgctrl :: {-# UNPACK #-} !(Ptr ())
+  , msgctrl :: {-# UNPACK #-} !(Ptr NNCMsgHdr)
   , msglctr :: {-# UNPACK #-} !(CSize)
   }
 

@@ -45,5 +45,5 @@ main = do
       recvKV s upd kvm
      `catchAsync` \_ ->  putStrLn (" Interrupted\n" ++ show (seq ) ++ " messages in")
 
-catchAsync ::  IO a -> (AsyncException -> IO a) -> IO a
+catchAsync :: IO a -> (AsyncException -> IO a) -> IO a
 catchAsync = catch

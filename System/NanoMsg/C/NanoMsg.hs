@@ -730,12 +730,49 @@ foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_recv"
 foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_recvmsg"
   nn_recvmsg_c :: (CInt -> ((Ptr ()) -> (CInt -> (IO CInt))))
 
-pollRecFd :: Bool -> CInt -> IO ()
-pollRecFd True  s = getFd NN_RCVFD s >>= threadWaitRead
-pollRecFd False _ = return ()
-pollSndFd :: Bool -> CInt -> IO ()
-pollSndFd True  s = getFd NN_SNDFD s >>= threadWaitWrite
-pollSndFd False _ = return ()
+pollRecFd :: Bool -> CInt -> Ptr () -> CULong -> CInt -> IO CInt
+pollRecFd True s ptr psize fls = do
+  res <- nn_recv_c s ptr psize fls
+  if res == (-1) then do
+    err <- nnErrno
+    if err == EAGAIN then do
+      getFd NN_RCVFD s >>= threadWaitRead >> pollRecFd True s ptr psize fls
+    else return res
+  else return res
+pollRecFd False s ptr psize fls = nn_recv_c s ptr psize fls
+pollRecFdMsg :: Bool -> CInt -> Ptr () -> CInt -> IO CInt
+pollRecFdMsg True s ptr fls = do
+  res <- nn_recvmsg_c s ptr fls
+  if res == (-1) then do
+    err <- nnErrno
+    if err == EAGAIN then do
+      getFd NN_RCVFD s >>= threadWaitRead >> pollRecFdMsg True s ptr fls 
+    else return res
+  else return res
+pollRecFdMsg False s ptr fls = nn_recvmsg_c s ptr fls
+
+pollSndFd :: Bool -> CInt -> Ptr () -> CULong -> CInt -> IO CInt
+pollSndFd True s ptr psize fls = do
+  res <- nn_send_c s ptr psize fls
+  if res == (-1) then do
+    err <- nnErrno
+    if err == EAGAIN then do
+      getFd NN_SNDFD s >>= threadWaitWrite >> pollSndFd True s ptr psize fls
+    else return res
+  else return res
+pollSndFd False s ptr psize fls = nn_send_c s ptr psize fls
+
+pollSndFdMsg :: Bool -> CInt -> Ptr () -> CInt -> IO CInt
+pollSndFdMsg True s ptr fls = do
+  res <- nn_sendmsg_c s ptr fls
+  if res == (-1) then do
+    err <- nnErrno
+    if err == EAGAIN then do
+      getFd NN_SNDFD s >>= threadWaitWrite >> pollSndFdMsg True s ptr fls
+    else return res
+  else return res
+pollSndFdMsg False s ptr fls = nn_sendmsg_c s ptr fls
+
 
 -- TODO manage error (no fd result from getOption)
 getFd :: (Enum c) => c -> CInt -> IO Fd
@@ -756,8 +793,7 @@ nnRecvDyn' soc fls =
   withNullPPtr $ \nulptr -> 
   withNnMSG $ \size -> 
   let {(f,w) = rFlagsToCInt fls} in 
-  nn_recv_c s nulptr size f >>= \res ->
-  pollRecFd w s >>
+  pollRecFd w s nulptr size f >>= \res ->
   errorFromLength res >>= \res' ->
   pVoid  nulptr>>= \a2'' -> 
   return (res', a2'')
@@ -767,8 +803,7 @@ nnRecvDyn a1 a4 =
   withNullPPtr $ \a2' -> 
   withNnMSG $ \a3' -> 
   let {(a4',w) = rFlagsToCInt a4} in 
-  nn_recv_c a1' a2' a3' a4' >>= \res ->
-  pollRecFd w a1' >>
+  pollRecFd w a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   foreignPMsg  a2'>>= \a2'' -> 
   return (res', a2'')
@@ -778,8 +813,7 @@ nnRecv a1 a2 a3 a4 =
   withForeignPtr a2 $ \a2' -> 
   let {a3' = fromIntegral a3} in 
   let {(a4',w) = rFlagsToCInt a4} in 
-  nn_recv_c a1' a2' a3' a4' >>= \res ->
-  pollRecFd w a1' >>
+  pollRecFd w a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
 
@@ -789,8 +823,7 @@ nnRecv' a1 a2 a3 a4 =
   let {a2' = id a2} in 
   let {a3' = fromIntegral a3} in 
   let {(a4',w) = rFlagsToCInt a4} in 
-  nn_recv_c a1' a2' a3' a4' >>= \res ->
-  pollRecFd w a1' >>
+  pollRecFd w a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
 
@@ -799,8 +832,7 @@ nnRecvmsg a1 a2 a3 =
   let {a1' = socketToCInt a1} in 
   fromMsgHdr a2 $ \a2' -> 
   let {(a3',w) = rFlagsToCInt a3} in 
-  nn_recvmsg_c a1' a2' a3' >>= \res ->
-  pollRecFd w a1' >>
+  pollRecFdMsg w a1' a2' a3' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
 
@@ -809,8 +841,7 @@ nnRecvfmsg a1 a2 a3 =
   let {a1' = socketToCInt a1} in 
   fromFMsgHdr a2 $ \a2' -> 
   let {(a3',w) = rFlagsToCInt a3} in 
-  nn_recvmsg_c a1' a2' a3' >>= \res ->
-  pollRecFd w a1' >>
+  pollRecFdMsg w a1' a2' a3' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
 
@@ -825,7 +856,7 @@ nnSendB a1 a2 a3 a4 =
   nnSendB'_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 417 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 448 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- | not ForeignFree
 nnSendB' :: (NnSocket) -> (Ptr ()) -> (Int) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
 nnSendB' a1 a2 a3 a4 =
@@ -836,7 +867,7 @@ nnSendB' a1 a2 a3 a4 =
   nnSendB''_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 419 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 450 "System/NanoMsg/C/NanoMsg.chs" #-}
 -- | no foreign (deallocate is managed by nanomq)
 nnSendDynB :: (NnSocket) -> (Ptr ()) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
 nnSendDynB a1 a2 a4 =
@@ -847,7 +878,7 @@ nnSendDynB a1 a2 a4 =
   nnSendDynB'_ a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 421 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 452 "System/NanoMsg/C/NanoMsg.chs" #-}
 --{#fun unsafe nn_send as nnSendDyn {socketToCInt `NnSocket', withPForeign* `ForeignPtr ()', withNnMSG- `Int', flagsToCInt `[SndRcvFlags]'} -> `Either NnError Int' errorFromLength* #} -- Do no send with foreing free pointer because nn deallocate
 
 nnSendmsgB :: (NnSocket) -> (NNMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
@@ -858,7 +889,7 @@ nnSendmsgB a1 a2 a3 =
   nnSendmsgB'_ a1' a2' a3' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 424 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 455 "System/NanoMsg/C/NanoMsg.chs" #-}
 nnSendfmsgB :: (NnSocket) -> (NNFMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
 nnSendfmsgB a1 a2 a3 =
   let {a1' = socketToCInt a1} in 
@@ -867,7 +898,7 @@ nnSendfmsgB a1 a2 a3 =
   nnSendfmsgB'_ a1' a2' a3' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
-{-# LINE 425 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 456 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 foreign import ccall unsafe "System/NanoMsg/C/NanoMsg.chs.h nn_send"
   nn_send_c :: (CInt -> ((Ptr ()) -> (CULong -> (CInt -> (IO CInt)))))
@@ -884,8 +915,7 @@ nnSend a1 a2 a3 a4 =
   withForeignPtr a2 $ \a2' -> 
   let {a3' = fromIntegral a3} in 
   let {(a4',w) = sFlagsToCInt a4} in 
-  nn_send_c a1' a2' a3' a4' >>= \res ->
-  pollSndFd w a1' >>
+  pollSndFd w a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
 -- | not ForeignFree
@@ -895,8 +925,7 @@ nnSend' a1 a2 a3 a4 =
   let {a2' = id a2} in 
   let {a3' = fromIntegral a3} in 
   let {(a4',w) = sFlagsToCInt a4} in 
-  nn_send_c a1' a2' a3' a4' >>= \res ->
-  pollSndFd w a1' >>
+  pollSndFd w a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
 {-# LINE 315 "System/NanoMsg/C/NanoMsg.chs" #-}
@@ -907,8 +936,7 @@ nnSendDyn a1 a2 a4 =
   withPPtr a2 $ \a2' -> 
   withNnMSG $ \a3' -> 
   let {(a4',w) = sFlagsToCInt a4} in 
-  nn_send_c a1' a2' a3' a4' >>= \res ->
-  pollSndFd w a1' >>
+  pollSndFd w a1' a2' a3' a4' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
 nnSendmsg :: (NnSocket) -> (NNMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
@@ -916,8 +944,7 @@ nnSendmsg a1 a2 a3 =
   let {a1' = socketToCInt a1} in 
   fromMsgHdr a2 $ \a2' -> 
   let {(a3',w) = sFlagsToCInt a3} in 
-  nn_sendmsg_c a1' a2' a3' >>= \res ->
-  pollSndFd w a1' >>
+  pollSndFdMsg w a1' a2' a3' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
 nnSendfmsg :: (NnSocket) -> (NNFMsgHdr) -> ([SndRcvFlags]) -> IO ((Either NnError Int))
@@ -925,8 +952,7 @@ nnSendfmsg a1 a2 a3 =
   let {a1' = socketToCInt a1} in 
   fromFMsgHdr a2 $ \a2' -> 
   let {(a3',w) = sFlagsToCInt a3} in 
-  nn_sendmsg_c a1' a2' a3' >>= \res ->
-  pollSndFd w a1' >>
+  pollSndFdMsg w a1' a2' a3' >>= \res ->
   errorFromLength res >>= \res' ->
   return (res')
 
@@ -944,7 +970,7 @@ nnDevice a1 a2 =
   nnDevice'_ a1' a2' >>= \res ->
   errorFromRetCode res >>= \res' ->
   return (res')
-{-# LINE 495 "System/NanoMsg/C/NanoMsg.chs" #-}
+{-# LINE 521 "System/NanoMsg/C/NanoMsg.chs" #-}
 
 -- Struct related Code for simplicity and to avoid boilerplate code, this could be refactor in a separate hs2c module with usage of data, or moved in c helper functions.
 
