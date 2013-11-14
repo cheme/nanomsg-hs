@@ -14,6 +14,10 @@ import qualified Data.ByteString.Unsafe as U
 import qualified Data.List as L
 import System.Posix.Types(Fd)
 import Control.Concurrent(threadWaitWrite,threadWaitRead)
+import qualified Data.ByteString as BS
+import Data.List(foldl')
+import Control.Monad(foldM,foldM_)
+import Data.ByteString.Internal(ByteString(PS))
 
 #include "nanomsg/nn.h"
 #include "nanomsg/pair.h"
@@ -533,5 +537,68 @@ toCMsgHdr = peek . castPtr
 
 maybeCMsg :: Ptr () -> IO (Maybe NNCMsgHdr)
 maybeCMsg m = if m == nullPtr then return Nothing else toCMsgHdr m >>= (return . Just)
+
+-- | MsgHdr helpers
+
+type MsgHdr = Ptr NNCMsgHdr
+
+newRawMsgHdr :: (Storable s) => s -> IO (Either NnError MsgHdr)
+newRawMsgHdr s = do 
+  let totle = sizeOf s
+  mem <- nnAllocmsg (totle) 0
+  case mem of 
+    (Left e) -> return $ Left e
+    (Right ptr') -> do
+      let ptr = castPtr ptr'
+      poke ptr s
+      return $ Right ptr
+
+getRawMsgHdr :: (Storable s) => MsgHdr -> IO (Either NnError s)
+getRawMsgHdr pt = do 
+   r  <- peek (castPtr pt)
+   er <- nnFreemsg (castPtr pt) -- as bs are copied
+   case er of
+      (Just e) -> return $ Left e
+      Nothing  -> return $ Right r
+ 
+newMSgHdr :: [(BS.ByteString, Int, Int)] -> IO (Either NnError MsgHdr)
+newMSgHdr hdrs = do 
+  let totle = foldl' (\acc (bs, _, _)-> acc + BS.length bs + hdrsize) 0 hdrs -- TODO do not use BS.length
+  mem <- nnAllocmsg (totle) 0
+  case mem of 
+    (Left e) -> return $ Left e
+    (Right ptr') -> do
+      let ptr = castPtr ptr'
+      foldM_ (pokeEl (ptr)) 0 hdrs
+      return $ Right ptr
+    where pokeEl :: MsgHdr -> Int -> (BS.ByteString, Int, Int) -> IO Int
+          pokeEl ptr offset ((PS pbs pof ple), lev, typ ) = do
+                                        poke  (ptr `plusPtr` offset) $ NNCMsgHdr (fromIntegral (ple - pof)) (fromIntegral lev) (fromIntegral typ)
+                                        --pokeElemOff ptr (offset + sizeOf hdr) bs
+                                        withForeignPtr pbs $ \pbs' -> copyBytes (ptr `plusPtr` (offset + hdrsize)) ((castPtr pbs') `plusPtr` pof) (ple - pof) -- TODO use unsafe bytestring api instead
+                                        return (offset + hdrsize + (ple - pof))
+          hdrsize = sizeOf (undefined :: NNCMsgHdr)
+
+-- test MsgHdr not nullPtr not here
+getMSgHdr :: MsgHdr -> Int -> IO (Either NnError [(BS.ByteString, Int, Int)])
+getMSgHdr pt nbh = do
+  r <- if nbh == fromIntegral nN_MSG then do
+     id <- peek (castPtr pt) :: IO CUInt
+     return [(BS.pack [],fromIntegral id,0)]
+  else do 
+     (_,r) <- foldM (\acc _ -> peekmsg pt acc ) (0,[]) [1..nbh]
+     return r
+  er <- nnFreemsg (castPtr pt) -- as bs are copied
+  case er of
+      (Just e) -> return $ Left e
+      Nothing  -> return $ Right $ reverse r
+  where
+         peekmsg ptr' (offset, acc) = do 
+           let ptr =  ptr' `plusPtr` offset
+           ptch <- peek ptr
+           bs <- BS.packCStringLen (ptr `plusPtr` (sizeOf ptch ), (fromIntegral (cmsglen ptch))) -- here use bytestring PS instead
+           let newoffset = offset + sizeOf ptch + fromIntegral (cmsglen ptch)
+           return (newoffset, (bs, fromIntegral (cmsglev ptch), fromIntegral (cmsgtyp ptch)) : acc)
+
 
 

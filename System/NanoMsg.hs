@@ -136,6 +136,7 @@ type Flag = SndRcvFlags
 -- FMessage got automatic memory management (using ForeignPointer)
 -- Using FMessages is not always safer, and could be problematics (memory release depends upon garbage collector so it is not deterministic).
 -- TODO this and socket type should be rewritten to use gadt
+-- For message hdr, current nanomsg (alpha) store only dynamic length header -> we add a small implementation for static length which explain some strange serialization to nN_MSG
 data SingleMessage = SingleMessage NNMsgHdr Int
 data SingleFMessage = SingleFMessage NNFMsgHdr Int 
 data MultiMessage = MultiMessage NNMsgHdr 

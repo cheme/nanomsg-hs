@@ -15,6 +15,9 @@ import Foreign.C.String
 foreign import ccall "System/NanoMsg/C/NanoMsg.chs.h &nn_freemsg"
    nnFunPtrFreeMsg :: FunPtr (Ptr () -> IO ())
 
+-- For message hdr, current nanomsg (alpha) store only dynamic length header -> we add a small implementation for static length which explain some strange serialization to nN_MSG : see comment with @1
+
+
 nN_MSG :: CInt
 nN_MSG = #const NN_MSG
 
@@ -68,9 +71,11 @@ data NNMsgHdr = NNMsgHdr
 data NNFMsgHdr = NNFMsgHdr
   { msgfvecs :: !([NNFIoVec])
   , msgflvec :: {-# UNPACK #-} !CInt
-  , msgfctrl :: {-# UNPACK #-} !(ForeignPtr ())
+  , msgfctrl :: {-# UNPACK #-} !(ForeignPtr NNCMsgHdr)
   , msgflctr :: {-# UNPACK #-} !(CSize)
   }
+
+-- Note that peek on NNFMsgHdr and NNMsgHdr is not use due to nanomsg receive working (already instantiated when receiving).
 
 instance Storable NNFMsgHdr where
   alignment _ = #{alignment nn_msghdr}
@@ -101,8 +106,14 @@ instance Storable NNMsgHdr where
   poke ptr (NNMsgHdr vs vl cs cl) = do
     #{poke nn_msghdr, msg_iov} ptr vs
     #{poke nn_msghdr, msg_iovlen} ptr vl
-    #{poke nn_msghdr, msg_control} ptr cs
-    #{poke nn_msghdr, msg_controllen} ptr cl
+    if (cl == (-1)) then
+      #{poke nn_msghdr, msg_control} ptr cs
+    else -- poke multi hdr (don't use pokeArray (not constant size elements))
+      #{poke nn_msghdr, msg_control} ptr cs
+    if (cl == 0) then
+      #{poke nn_msghdr, msg_controllen} ptr cl
+    else
+      #{poke nn_msghdr, msg_controllen} ptr (fromIntegral nN_MSG :: CSize) -- @1
 
 data NNCMsgHdr = NNCMsgHdr
   { cmsglen :: {-# UNPACK #-} !(CSize)

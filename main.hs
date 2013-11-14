@@ -21,6 +21,8 @@ import Data.ByteString.Internal(ByteString(PS))
 import Data.List(foldl')
 import Control.Monad(foldM_)
 import qualified System.NanoMsg as N
+import Control.Monad(foldM)
+import Foreign.C.Types(CUInt)
 main :: IO ()
 main = do
 
@@ -29,11 +31,11 @@ main = do
    -- parameter handling
  case args of 
   [host, port] -> do
-   --sockpair1 <- nnSocket AF_SP NN_REP >>= getEr -- ok
-   sockpair1 <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
+   sockpair1 <- nnSocket AF_SP_RAW NN_REP >>= getEr -- ok
+   --sockpair1 <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
    ereq <- nnBind sockpair1 "inproc://tsest"
---   sockpair2 <- nnSocket AF_SP NN_REQ >>= getEr -- ok
-   sockpair2 <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
+   sockpair2 <- nnSocket AF_SP_RAW NN_REQ >>= getEr -- ok
+   --sockpair2 <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
    erep <- nnConnect sockpair2 "inproc://tsest"
    (v1, l1) <- newCAStringLen "Hello"
    (v2, l2) <- newCAStringLen "World"
@@ -42,19 +44,20 @@ main = do
    let nbvec = 2
    iovec <- mallocArray nbvec
    pokeArray iovec [iovec1,iovec2]
-   
+
    -- meta
    let cmsghdr = NNCMsgHdr 3 1 1 -- level 1 type 1 size 0 only, dynamic length only
    let cmsghdr2 = NNCMsgHdr 5 2 2 -- level 1 type 1 size 0 only, dynamic length only
    --let cmsghdr = NNCMsgHdr (3 + fromIntegral (sizeOf (undefined :: NNCMsgHdr))) 1 1 -- level 1 type 1 size 0 only, dynamic length only
-   nncdata <- ptrToCData [(cmsghdr, "123"),(cmsghdr2, "54321")] -- TODO implement api which create hdr
+--   nncdata <- newMSgHdr [("123", 1, 1),("54321", 2, 2)] >>= getEr -- TODO implement api which create hdr
+--   nncdata <- ptrToCData [(cmsghdr,"123"),(cmsghdr2,"54321")] -- TODO implement api which create hdr
    
    ptcdata <- malloc :: IO (Ptr (Ptr (NNCMsgHdr))) -- any ptr TODO in api alloca or foreignfree
-   poke ptcdata nncdata
+--   poke ptcdata nncdata
  
 
 
-   let msghdr = NNMsgHdr (castPtr iovec) (fromIntegral nbvec) (castPtr ptcdata) (fromIntegral nN_MSG)
+   let msghdr = NNMsgHdr (castPtr iovec) (fromIntegral nbvec) nullPtr 0
 
    (v1R, l1R) <- newCAStringLen "aaaaaaa" --Size is too long = wrong get content out of buffer
    (v2R, l2R) <- newCAStringLen "hhh" -- Size is too short = ok some content is discard
@@ -64,7 +67,7 @@ main = do
    pokeArray iovecR [iovec1R,iovec2R]
    ptcdataR <- malloc :: IO (Ptr (Ptr (NNCMsgHdr))) -- any ptr TODO in api alloca or foreignfree
    poke ptcdataR nullPtr
-   let msghdrRec = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) (castPtr ptcdataR) (fromIntegral nN_MSG)
+   let msghdrRec = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) (castPtr ptcdataR) 1
 --   cmsghdr <- peek ptch
    -- overwright in existing struct
    si <- nnSendmsg sockpair2 msghdr [] >>= getEr
@@ -72,33 +75,30 @@ main = do
    si1 <- nnRecvmsg sockpair1 msghdrRec [] >>= getEr
    putStrLn "msg seemlessly received"
    ptch' <- peek ptcdataR
-   if (ptch' /= nullPtr) then do
-     ptch <- peek ptch'
-     putStrLn $ "ch . " ++ show (cmsglen ptch) ++ show (cmsgtyp ptch)
-     cs1 <- peekCStringLen (ptch' `plusPtr` (sizeOf ptch ), (fromIntegral (cmsglen ptch))) -- here use bytestring PS instead
-     putStrLn $ show cs1
-     let ptch'' = ptch' `plusPtr` (sizeOf ptch ) `plusPtr` (fromIntegral (cmsglen ptch))
-     ptch2 <- peek ptch''
-     putStrLn $ "ch . " ++ show (cmsglen ptch2) ++ show (cmsgtyp ptch2)
-     putStrLn $ show $ sizeOf ptch
-     putStrLn $ show $ alignment ptch
-     cs2 <- peekCStringLen (ptch'' `plusPtr` (sizeOf (ptch2 :: NNCMsgHdr) ), (fromIntegral (cmsglen ptch2))) -- here use bytestring PS instead
-     putStrLn $ show cs2
-     cmsg <- cmsgFirstHdr msghdrRec
-     case cmsg of
-       Nothing -> putStrLn "ko"
-       Just cm -> do 
-         putStrLn $ "ch . " ++ show (cmsglen cm) ++ show (cmsgtyp cm)
-         cmsgData cm >>= (putStrLn . show)
-
-
-     else return ()
+   id <- if (ptch' /= nullPtr) then do
+--     hdrs <- getMSgHdr ptch' (fromIntegral nN_MSG) >>= getEr
+--     putStrLn $ show hdrs
+       id' <- (getRawMsgHdr ptch' :: IO (Either NnError CUInt)) >>= getEr
+       putStrLn $ show id'
+       return id'
+   else return undefined
 
    r1 <- peekCString v1R
    r2 <- peekCStringLen (v2R, (fromIntegral l2R))
    putStrLn $ show r1
    putStrLn $ show r2
  
+   -- now reply
+
+   ptcdataR2 <- malloc :: IO (Ptr (Ptr (NNCMsgHdr))) -- any ptr TODO in api alloca or foreignfree
+   hdr2 <- newRawMsgHdr id >>= getEr
+   poke ptcdataR2 hdr2 
+   let msghdr2 = NNMsgHdr (castPtr iovec) (fromIntegral nbvec) (castPtr ptcdataR2) 1
+   si <- nnSendmsg sockpair1 msghdr2 [] >>= getEr
+
+   putStrLn $ "msg send size : " ++ show si
+   let msghdrRec2 = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0
+   si2 <- nnRecvmsg sockpair2 msghdrRec2 [] >>= getEr
 
    putStrLn "* Test nn_socket"
    xsocksurveyor <- nnSocket AF_SP_RAW NN_SURVEYOR >>= getEr -- ok
@@ -292,11 +292,11 @@ getEr (Left a) = showEr a >> return undefined
 getEr (Right b) = return b
 getErr (Just a) = showEr a
 getErr Nothing = return ()
-
 ptrToCData :: [(NNCMsgHdr, BS.ByteString)] -> IO (Ptr NNCMsgHdr) -- TODO transform to with fn or foreignfree returned
 ptrToCData  a = do
   let totle = foldl' (\acc (h, bs)-> acc + BS.length bs + (sizeOf h )) 0 a -- TODO do not use BS.length
 --  ptr <- mallocBytes (totle)
+  putStrLn $ show totle
   ptr' <- nnAllocmsg (totle) 0 >>= getEr
   let ptr = castPtr ptr'
   foldM_ (pokeEl (ptr)) 0 a  >> return (ptr)

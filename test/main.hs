@@ -18,5 +18,6 @@ main = do
   testNnSendReceiveDyn >>= runTestTT
   testNnCmsg >>= runTestTT
   testNnSendReceiveMsg >>= runTestTT
+  testNnSendReceiveMsgHdr >>= runTestTT
   return ()
 

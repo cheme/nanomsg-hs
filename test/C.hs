@@ -203,7 +203,6 @@ testNnCmsg = do
     [ r ~? "Fail read write in cmsg"
     ]
 
-
 testNnSendReceiveMsg :: IO Test
 testNnSendReceiveMsg = do 
    (sockpair1,sockpair2) <- initPairs
@@ -271,6 +270,56 @@ testNnSendReceiveMsg = do
      , "HelloWo" ~=? r1
      , "rld" ~=? r2
      , m3 ~=? r3
+     ]
+
+
+-- TODO quick check it from api
+testNnSendReceiveMsgHdr :: IO Test
+testNnSendReceiveMsgHdr = do 
+   (sockpair1,sockpair2) <- initPairs
+   (v1, l1) <- newCAStringLen "Dummy"
+   let iovec1 = NNIoVec (castPtr v1) (fromIntegral l1)
+   let nbvec = 1
+   iovec <- mallocArray nbvec
+   pokeArray iovec [iovec1]
+   let hdrorig = [("123", 1, 5),("54321", 2, 1)] 
+   let nbhd = fromIntegral $ length hdrorig
+   nncdata <- newMSgHdr hdrorig >>= getEr
+   ptcdata <- malloc :: IO (Ptr (Ptr (NNCMsgHdr)))
+   poke ptcdata nncdata
+
+
+   let msghdr = NNMsgHdr (castPtr iovec) (fromIntegral nbvec) (castPtr ptcdata) nbhd
+   si <- nnSendmsg sockpair2 msghdr [] >>= getEr
+
+   (v1R, l1R) <- newCAStringLen "aaaaa" --Size is too long = wrong get content out of buffer
+   let iovec1R = NNIoVec (castPtr v1R) (fromIntegral l1R)
+   iovecR <- mallocArray nbvec
+   pokeArray iovecR [iovec1R]
+
+   ptcdataR <- malloc :: IO (Ptr (Ptr (NNCMsgHdr))) 
+   let msghdrRec = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) (castPtr ptcdataR) nbhd
+   -- overwright in existing struct
+   si1 <- nnRecvmsg sockpair1 msghdrRec [] >>= getEr
+   r1 <- peekCStringLen (v1R, (fromIntegral l1R))
+
+
+   ptch' <- peek ptcdataR
+   hdrs <- getMSgHdr ptch' (fromIntegral nbhd) >>= getEr
+
+--   free ptcdata
+   free v1
+   free iovec
+   free v1R 
+   free iovecR
+
+   free ptcdata
+   free ptcdataR
+
+   nnClose sockpair1
+   nnClose sockpair2
+   return $ "Send Receive MessagMessageHdr" ~:
+     [ hdrorig ~=? hdrs
      ]
 
 
