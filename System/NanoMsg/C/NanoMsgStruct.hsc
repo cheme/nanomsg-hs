@@ -15,7 +15,6 @@ import Foreign.C.String
 foreign import ccall "System/NanoMsg/C/NanoMsg.chs.h &nn_freemsg"
    nnFunPtrFreeMsg :: FunPtr (Ptr () -> IO ())
 
--- For message hdr, current nanomsg (alpha) store only dynamic length header -> we add a small implementation for static length which explain some strange serialization to nN_MSG : see comment with @1
 
 
 nN_MSG :: CInt
@@ -62,16 +61,16 @@ instance Storable NNFIoVec where
     #{poke nn_iovec, iov_len} ptr leng
 
 data NNMsgHdr = NNMsgHdr
-  { msgvecs :: {-# UNPACK #-} !(Ptr NNIoVec)
+  { msgvecs :: {-# UNPACK #-} !(Ptr NNIoVec) -- when using dyn its is Ptr (Ptr NNIoVec)
   , msglvec :: {-# UNPACK #-} !CInt
-  , msgctrl :: {-# UNPACK #-} !(Ptr NNCMsgHdr)
+  , msgctrl :: {-# UNPACK #-} !(Ptr (Ptr NNCMsgHdr))
   , msglctr :: {-# UNPACK #-} !(CSize)
   }
 
 data NNFMsgHdr = NNFMsgHdr
   { msgfvecs :: !([NNFIoVec])
   , msgflvec :: {-# UNPACK #-} !CInt
-  , msgfctrl :: {-# UNPACK #-} !(ForeignPtr NNCMsgHdr)
+  , msgfctrl :: {-# UNPACK #-} !(ForeignPtr (Ptr NNCMsgHdr))
   , msgflctr :: {-# UNPACK #-} !(CSize)
   }
 

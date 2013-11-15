@@ -8,5 +8,5 @@ library
   exposed-modules:     Kvsimple
   ghc-options:         -Wall -O2 -threaded
   other-extensions:    OverloadedStrings, CPP, ForeignFunctionInterface, EmptyDataDecls, DeriveDataTypeable, unordered-containers
-  build-depends:       base >=4.6 && <4.7, bytestring >=0.10 && <0.11, nanomsg-hs, binary, hashable
+  build-depends:       base >=4.6 && <4.7, bytestring >=0.10 && <0.11, nanomsg-hs, binary, hashable, random
   default-language:    Haskell2010

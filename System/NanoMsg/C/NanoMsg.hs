@@ -992,9 +992,8 @@ maybeCMsg m = if m == nullPtr then return Nothing else toCMsgHdr m >>= (return .
 
 -- | MsgHdr helpers
 
-type MsgHdr = Ptr NNCMsgHdr
 
-newRawMsgHdr :: (Storable s) => s -> IO (Either NnError MsgHdr)
+newRawMsgHdr :: (Storable s) => s -> IO (Either NnError (Ptr NNCMsgHdr))
 newRawMsgHdr s = do 
   let totle = sizeOf s
   mem <- nnAllocmsg (totle) 0
@@ -1005,7 +1004,7 @@ newRawMsgHdr s = do
       poke ptr s
       return $ Right ptr
 
-getRawMsgHdr :: (Storable s) => MsgHdr -> IO (Either NnError s)
+getRawMsgHdr :: (Storable s) => (Ptr NNCMsgHdr) -> IO (Either NnError s)
 getRawMsgHdr pt = do 
    r  <- peek (castPtr pt)
    er <- nnFreemsg (castPtr pt) -- as bs are copied
@@ -1013,7 +1012,7 @@ getRawMsgHdr pt = do
       (Just e) -> return $ Left e
       Nothing  -> return $ Right r
  
-newMSgHdr :: [(BS.ByteString, Int, Int)] -> IO (Either NnError MsgHdr)
+newMSgHdr :: [(BS.ByteString, Int, Int)] -> IO (Either NnError (Ptr NNCMsgHdr))
 newMSgHdr hdrs = do 
   let totle = foldl' (\acc (bs, _, _)-> acc + BS.length bs + hdrsize) 0 hdrs -- TODO do not use BS.length
   mem <- nnAllocmsg (totle) 0
@@ -1023,7 +1022,7 @@ newMSgHdr hdrs = do
       let ptr = castPtr ptr'
       foldM_ (pokeEl (ptr)) 0 hdrs
       return $ Right ptr
-    where pokeEl :: MsgHdr -> Int -> (BS.ByteString, Int, Int) -> IO Int
+    where pokeEl :: (Ptr NNCMsgHdr) -> Int -> (BS.ByteString, Int, Int) -> IO Int
           pokeEl ptr offset ((PS pbs pof ple), lev, typ ) = do
                                         poke  (ptr `plusPtr` offset) $ NNCMsgHdr (fromIntegral (ple - pof)) (fromIntegral lev) (fromIntegral typ)
                                         --pokeElemOff ptr (offset + sizeOf hdr) bs
@@ -1032,7 +1031,7 @@ newMSgHdr hdrs = do
           hdrsize = sizeOf (undefined :: NNCMsgHdr)
 
 -- test MsgHdr not nullPtr not here
-getMSgHdr :: MsgHdr -> Int -> IO (Either NnError [(BS.ByteString, Int, Int)])
+getMSgHdr :: (Ptr NNCMsgHdr) -> Int -> IO (Either NnError [(BS.ByteString, Int, Int)])
 getMSgHdr pt nbh = do
   r <- if nbh == fromIntegral nN_MSG then do
      id <- peek (castPtr pt) :: IO CUInt

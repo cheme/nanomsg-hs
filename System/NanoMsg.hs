@@ -89,19 +89,38 @@ module System.NanoMsg (
   , setSubUnsubscribe
   , getSurveyorDeadline
   , setSurveyorDeadline
-  -- * Message manipulation operations
+  -- * Message manipulation operations -- TODO get rid of some of most of them plus refactor with accessor other CStruct
   , newMultimessage
   , newMultimessage'
   , newMultifmessage
   , newMultifmessage'
   , newSinglemessage
   , newSinglemessage'
+  , getSinglemessage
+  , ugetSinglemessage
+  , getSinglemessage'
   , newSinglefmessage
   , newSinglefmessage'
   , addMultimessage
   , addMultimessage'
   , addMultifmessage
   , addMultifmessage'
+  , setHeaders
+  , setFHeaders
+  , setMHeaders
+  , setMFHeaders
+  , setRawHeaders
+  , setRawFHeaders
+  , setRawMHeaders
+  , setRawMFHeaders
+  , getHeaders
+  , getFHeaders
+  , getMHeaders
+  , getMFHeaders
+  , getRawHeaders
+  , getRawFHeaders
+  , getRawMHeaders
+  , getRawMFHeaders
   ) where
 import System.NanoMsg.C.NanoMsg
 import System.NanoMsg.C.NanoMsgStruct
@@ -137,10 +156,12 @@ type Flag = SndRcvFlags
 -- Using FMessages is not always safer, and could be problematics (memory release depends upon garbage collector so it is not deterministic).
 -- TODO this and socket type should be rewritten to use gadt
 -- For message hdr, current nanomsg (alpha) store only dynamic length header -> we add a small implementation for static length which explain some strange serialization to nN_MSG
-data SingleMessage = SingleMessage NNMsgHdr Int
-data SingleFMessage = SingleFMessage NNFMsgHdr Int 
-data MultiMessage = MultiMessage NNMsgHdr 
-data MultiFMessage = MultiFMessage NNFMsgHdr 
+-- SingleMessage last Int parameter is to store its size
+-- First Int for message is the number of header nN_Message means one dynamic header used raw.
+data SingleMessage = SingleMessage NNMsgHdr Int Int
+data SingleFMessage = SingleFMessage NNFMsgHdr Int Int
+data MultiMessage = MultiMessage NNMsgHdr Int
+data MultiFMessage = MultiFMessage NNFMsgHdr Int
 
 -- | Type for Endpoint of sockets
 data EndPoint a = EndPoint NnSocket NnEndPoint
@@ -210,13 +231,13 @@ class Message a where
 class FMessage a where
   getCFPtr :: a -> NNFMsgHdr
 instance Message SingleMessage where
-  getCPtr (SingleMessage msg _) = msg
+  getCPtr (SingleMessage msg _ _) = msg
 instance Message MultiMessage where
-  getCPtr (MultiMessage msg) = msg
+  getCPtr (MultiMessage msg _) = msg
 instance FMessage SingleFMessage where
-  getCFPtr (SingleFMessage msg _) = msg
+  getCFPtr (SingleFMessage msg _ _) = msg
 instance FMessage MultiFMessage where
-  getCFPtr (MultiFMessage msg) = msg
+  getCFPtr (MultiFMessage msg _) = msg
 
 instance SocketType Pair where nnSocketType = const NN_PAIR
 instance Sender Pair
@@ -289,7 +310,7 @@ socket t = nnSocket AF_SP (nnSocketType t) >>= eitherError "socket" >>= return .
 -- | Create a raw nanomsg socket. Socket must be close explicitely. It is safer to use 'withSocket'
 -- Throws NanoError
 xsocket :: HasRawSocket a => a -> IO (Socket a)
-xsocket t = nnSocket AF_SP (nnSocketType t) >>= eitherError "xsocket" >>= return . Socket
+xsocket t = nnSocket AF_SP_RAW (nnSocketType t) >>= eitherError "xsocket" >>= return . Socket
 
 -- | Close a socket. Return Nothing if close successfully. See official documentation nn_close(3)
 -- Throws NanoError
@@ -337,7 +358,7 @@ send (Socket s) fls val = BS.useAsCStringLen val (\(cs,l) -> nnSend' s (castPtr 
 send' :: Sender a => Socket a -> [Flag] -> BS.ByteString -> IO Int
 send' (Socket s) fls (PS pbs pof ple) = do
   p <- nnAllocmsg (ple - pof) 0 >>= eitherError "send' nnAllocmsg"
-  withForeignPtr pbs $ \pbs' -> copyBytes p (castPtr pbs') (ple - pof) -- TODO unsafe use as cstring then poke in memory??
+  withForeignPtr pbs $ \pbs' -> copyBytes p (castPtr pbs' `plusPtr` pof) (ple - pof) -- TODO unsafe use as cstring then poke in memory??
   si' <- nnSendDyn s p fls
   case si' of
     Left e -> nnFreemsg p >> throwError "send'" e -- The fact that we free might be a problem if send already free it (send free the buffer when sending) TODO further testing
@@ -383,59 +404,67 @@ sendFMsg :: (Sender a, FMessage b) => Socket a -> [Flag] -> b -> IO Int
 sendFMsg (Socket s) fls msg = nnSendfmsg s (getCFPtr msg) fls >>= eitherError "sendFMsg"
 
 
--- | Same as 'receiveSingleMsg' but memory management is done by foreignPointer (at gc no freeMsg required). 
+-- | Same as 'receiveSingleMsg' but memory management is done by foreignPointer (at gc no freeMsg required).
+-- Boolean value indicate if we try to receive message header.
 -- Throws NanoError
-receiveSingleFMsg :: Receiver a => Socket a -> [Flag] -> IO SingleFMessage
-receiveSingleFMsg (Socket sock) fls = do
+receiveSingleFMsg :: Receiver a => Socket a -> Int -> [Flag] -> IO SingleFMessage
+receiveSingleFMsg (Socket sock) nbHeader fls = do
    ptR <- mallocForeignPtr :: IO (ForeignPtr (Ptr ())) -- any ptr TODO in api alloca or foreignfree
    let iovecR = NNFIoVec (castForeignPtr ptR) (fromIntegral nN_MSG)
-   fnullPtr <- newForeignPtr finalizerFree nullPtr  
-   let msghdrRec = NNFMsgHdr [iovecR] 1 fnullPtr 0
-   nnRecvfmsg sock msghdrRec fls >>= eitherError "receiveSingleFMsg" >>= return . SingleFMessage msghdrRec
+   fHPtr <- newForeignPtr finalizerFree nullPtr
+   -- TODO add finalizer to freemsg of the received header if not Null!!!!
+   let msghdrRec = NNFMsgHdr [iovecR] 1 fHPtr $ if nbHeader == 0 then 0 else (fromIntegral nN_MSG) -- @1
+   nnRecvfmsg sock msghdrRec fls >>= eitherError "receiveSingleFMsg" >>= return . SingleFMessage msghdrRec nbHeader
 
 -- | Receive a Message from the to socket. See official documentation nn_recvmsg(3) 
 -- It uses dynamic size messages
 -- Throws NanoError
-receiveSingleMsg :: Receiver a => Socket a -> [Flag] -> IO SingleMessage
-receiveSingleMsg (Socket sock) fls = do
-   msghdrRec <- singleMsgInit Nothing
-   nnRecvmsg sock msghdrRec fls >>= eitherError "receiveSingleMsg" >>= return . SingleMessage msghdrRec
+receiveSingleMsg :: Receiver a => Socket a -> Int -> [Flag] -> IO SingleMessage
+receiveSingleMsg (Socket sock) nbHeader fls = do
+   msghdrRec <- singleMsgInit Nothing nbHeader
+   nnRecvmsg sock msghdrRec fls >>= eitherError "receiveSingleMsg" >>= return . SingleMessage msghdrRec nbHeader
 
-singleMsgInit :: Maybe (Ptr ()) -> IO NNMsgHdr
-singleMsgInit mp = do
+singleMsgInit :: Maybe (Ptr ()) -> Int -> IO NNMsgHdr
+singleMsgInit mp nbHeader = do
    ptR <- malloc :: IO (Ptr (Ptr ()))
    let iovecR = NNIoVec (castPtr ptR) (fromIntegral nN_MSG)
    iovecAR <- malloc :: IO (Ptr NNIoVec) -- only one element array
    poke iovecAR iovecR
    maybe (return ()) (poke ptR) mp
-   return $ NNMsgHdr (castPtr iovecAR) 1 nullPtr 0
+   ptcdataR <- if nbHeader == 0 then return nullPtr else do
+     ptcdataR' <- malloc :: IO (Ptr (Ptr (NNCMsgHdr)))
+     poke ptcdataR' nullPtr
+     return ptcdataR'
+   return $ NNMsgHdr (castPtr iovecAR) 1 ptcdataR $ if nbHeader == 0 then 0 else (fromIntegral nN_MSG) -- @1
  
 -- | Receive a Message from the to socket. See official documentation nn_recvmsg(3)
 -- A list of size for each parts is used to allocate memory buffer.
 -- Throws NanoError
-receiveMultiMsg :: Receiver a => Socket a -> [Flag] -> [Int] -> IO MultiMessage
-receiveMultiMsg (Socket sock) fls sizes = do
+receiveMultiMsg :: Receiver a => Socket a -> Int -> [Flag] -> [Int] -> IO MultiMessage
+receiveMultiMsg (Socket sock) nbHeader fls sizes = do
    -- TODO move this code in c interface
    let nbvec = length sizes
    iovecR <- mallocArray nbvec
    iovecR' <- mapM (\s -> mallocArray s >>= (\a -> return (NNIoVec a (fromIntegral s)))) sizes
    pokeArray iovecR iovecR'
-   let msghdrRec = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0
+   ptcdataR <- malloc :: IO (Ptr (Ptr (NNCMsgHdr)))
+   poke ptcdataR nullPtr
+   let msghdrRec = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) ptcdataR $ if nbHeader == 0 then 0 else (fromIntegral nN_MSG) -- @1
    _ <- nnRecvmsg sock msghdrRec fls >>= eitherError "receiveMultiMsg"
-   return $ MultiMessage msghdrRec
+   return $ MultiMessage msghdrRec nbHeader
 
 
 -- | Sames as 'receiveMultiMsg' but with Foreign pointer Messages
 -- Throws NanoError
-receiveMultiFMsg :: Receiver a => Socket a -> [Flag] -> [Int] -> IO MultiFMessage
-receiveMultiFMsg (Socket sock) fls sizes = do
+receiveMultiFMsg :: Receiver a => Socket a -> Int -> [Flag] -> [Int] -> IO MultiFMessage
+receiveMultiFMsg (Socket sock) nbHeader fls sizes = do
    -- TODO move this code in c interface
    let nbvec = length sizes
    iovecR <- mapM (\s -> mallocForeignPtrArray s >>= (\a -> return (NNFIoVec a (fromIntegral s)))) sizes
-   fnullPtr <- newForeignPtr finalizerFree nullPtr
-   let msghdrRec = NNFMsgHdr iovecR (fromIntegral nbvec) fnullPtr 0
+   fHPtr <- newForeignPtr finalizerFree nullPtr
+   let msghdrRec = NNFMsgHdr iovecR (fromIntegral nbvec) fHPtr $ if nbHeader == 0 then 0 else (fromIntegral nN_MSG) -- @1
    _ <- nnRecvfmsg sock msghdrRec fls >>= eitherError "receiveMultiFMsg"
-   return $ MultiFMessage msghdrRec
+   return $ MultiFMessage msghdrRec nbHeader
 
 
 -- | initiate multipart message from bytestrings
@@ -447,11 +476,12 @@ newMultimessage bs = do
    iovecR' <- mapM (\(PS pbs pof ple) -> do
      let l = ple - pof
      p <- mallocArray (fromIntegral l)
-     withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs') (ple - pof))
+     withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs' `plusPtr` pof) (ple - pof))
      return $ NNIoVec p $ fromIntegral l
      ) bs
    pokeArray iovecR iovecR'
-   return $ MultiMessage $ NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0
+   -- TODO add header pointer like in single msg init
+   return $ MultiMessage (NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0) 0
  
 newMultifmessage :: [ByteString] -> IO MultiFMessage
 newMultifmessage bs = do
@@ -459,11 +489,11 @@ newMultifmessage bs = do
    iovecR <- mapM (\(PS pbs pof ple) -> do
      let l = ple - pof
      p <- mallocForeignPtrArray (fromIntegral l)
-     withForeignPtr pbs (\pbs' -> withForeignPtr p (\p' -> copyBytes p' (castPtr pbs') (ple - pof)))
+     withForeignPtr pbs (\pbs' -> withForeignPtr p (\p' -> copyBytes p' (castPtr pbs' `plusPtr` pof) (ple - pof)))
      return $ NNFIoVec p $ fromIntegral l
      ) bs
    fnullPtr <- newForeignPtr finalizerFree nullPtr
-   return $ MultiFMessage $ NNFMsgHdr iovecR (fromIntegral nbvec) fnullPtr 0
+   return $ MultiFMessage (NNFMsgHdr iovecR (fromIntegral nbvec) fnullPtr 0) 0
 
 
 newMultimessage' :: (Storable m) => [m] -> IO MultiMessage
@@ -472,7 +502,7 @@ newMultimessage' ms = do
    iovecR  <- mallocArray nbvec
    iovecR'  <- initMultimessage' ms
    pokeArray iovecR iovecR'
-   return $ MultiMessage $ NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0
+   return $ MultiMessage (NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0) 0
 
 initMultimessage' :: (Storable m) => [m] -> IO [NNIoVec]
 initMultimessage' = mapM (\s -> do
@@ -493,7 +523,7 @@ newMultifmessage' ms = do
    let nbvec = length ms
    iovecR <- initMultifmessage' ms
    fnullPtr <- newForeignPtr finalizerFree nullPtr
-   return $ MultiFMessage $ NNFMsgHdr iovecR (fromIntegral nbvec) fnullPtr 0
+   return $ MultiFMessage (NNFMsgHdr iovecR (fromIntegral nbvec) fnullPtr 0) 0
 
 -- | initiate singlepart message from a bytestring
 -- Throws NanoError
@@ -502,10 +532,9 @@ newSinglemessage (PS pbs pof ple) = do
    -- write bs in ptR
    let l = ple - pof
    p <- nnAllocmsg l 0 >>= eitherError "newSinglemessage"
-   msghdr <- singleMsgInit $ Just p
-   withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs') l)
-   return $ SingleMessage msghdr l
-
+   msghdr <- singleMsgInit (Just p) 0
+   withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs' `plusPtr` pof) l)
+   return $ SingleMessage msghdr 0 l
 -- | initiate singlepart fmessage (memory manage through foreign pointers) from a bytestring
 -- Throws NanoError
 newSinglefmessage :: ByteString -> IO SingleFMessage
@@ -515,17 +544,47 @@ newSinglefmessage (PS pbs pof ple) = do
    let l = ple - pof
    p <- nnAllocmsg l 0 >>= eitherError "newSinglefmessage"
    withForeignPtr ptR (`poke` p)
-   withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs') l)
+   withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs' `plusPtr` pof) l)
    fnullPtr <- newForeignPtr finalizerFree nullPtr
-   return $ SingleFMessage (NNFMsgHdr [iovecR] 1 fnullPtr 0) l
+   return $ SingleFMessage (NNFMsgHdr [iovecR] 1 fnullPtr 0) 0 l
 
 newSinglemessage' :: (Storable m) => m -> IO SingleMessage
 newSinglemessage' m = do
    let l = sizeOf m
    p <- nnAllocmsg l 0 >>= eitherError "newSinglemessage'"
-   nnmsghdr <- singleMsgInit $ Just p
+   nnmsghdr <- singleMsgInit (Just p) 0
    poke (castPtr p) m
-   return $ SingleMessage nnmsghdr l
+   return $ SingleMessage nnmsghdr 0 l
+
+-- | get value of message from a singlemessage
+-- Throws NanoError
+getSinglemessage :: SingleMessage -> IO ByteString
+getSinglemessage (SingleMessage (NNMsgHdr v _ _ _) _ l) = do
+  iovecs <- peek (castPtr v) -- dyn
+  iovec  <- peek iovecs  -- one elt only - no need to peekarray
+  let ptr = iobase iovec
+  bs  <- BS.packCStringLen (ptr, l)
+  return bs
+
+getSinglemessage' :: (Storable m) => SingleMessage -> IO m
+getSinglemessage' (SingleMessage (NNMsgHdr v _ _ _) _ l) = do
+  iovecs <- peek (castPtr v) -- dyn 
+  iovec  <- peek iovecs  -- one elt only - no need to peekarray
+  let ptr = iobase iovec
+  bs  <- peek (castPtr ptr)
+  return bs
+
+
+ugetSinglemessage :: SingleMessage -> IO ByteString
+ugetSinglemessage (SingleMessage (NNMsgHdr v _ _ _) l _) = do
+  iovecs <- peek (castPtr v) -- dyn 
+  iovec  <- peek iovecs  -- one elt only - no need to peekarray
+  let ptr' = iobase iovec
+  ptr  <-  newForeignPtr nnFunPtrFreeMsg (castPtr ptr')
+  return $ PS (castForeignPtr ptr) 0 l
+
+-- TODO get for FMessages!!!  and MultiMessages!!!
+
 
 newSinglefmessage' :: (Storable m) => m -> IO SingleFMessage
 newSinglefmessage' m = do
@@ -536,58 +595,61 @@ newSinglefmessage' m = do
    withForeignPtr ptR (`poke` p)
    poke (castPtr p) m
    fnullPtr <- newForeignPtr finalizerFree nullPtr
-   return $ SingleFMessage (NNFMsgHdr [iovecR] 1 fnullPtr 0) l
+   return $ SingleFMessage (NNFMsgHdr [iovecR] 1 fnullPtr 0) l 0
 
 -- | add message part
 -- It involves reallocating array memory so it should only
 -- be used for resending a message with extra information
 addMultimessage :: [ByteString] -> MultiMessage -> IO MultiMessage
-addMultimessage bs (MultiMessage (NNMsgHdr vs vl cs cl)) = do
+addMultimessage bs (MultiMessage (NNMsgHdr vs vl cs cl) nh) = do
   let l = length bs
   let nvl = vl + fromIntegral l
   nvs <- reallocArray vs l
   ios <- mapM (\(PS pbs pof ple) -> do
      let l' = ple - pof
      p <- mallocArray (fromIntegral l)
-     withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs') (ple - pof))
+     withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs' `plusPtr` pof) (ple - pof))
      return $ NNIoVec p $ fromIntegral l'
      ) bs
   pokeArray (nvs `plusPtr` fromIntegral vl) ios
-  return $ MultiMessage $ NNMsgHdr nvs nvl cs cl
+  return $ MultiMessage (NNMsgHdr nvs nvl cs cl) nh
 
 addMultimessage' :: (Storable m) => [m] -> MultiMessage -> IO MultiMessage
-addMultimessage' ms (MultiMessage (NNMsgHdr vs vl cs cl)) = do
+addMultimessage' ms (MultiMessage (NNMsgHdr vs vl cs cl) nh) = do
   let l = length ms
   let nvl = vl + fromIntegral l
   nvs <- reallocArray vs l
   ios <- initMultimessage' ms
   pokeArray (nvs `plusPtr` fromIntegral vl) ios
-  return $ MultiMessage $ NNMsgHdr nvs nvl cs cl
+  return $ MultiMessage (NNMsgHdr nvs nvl cs cl) nh
 
 addMultifmessage :: [ByteString] -> MultiFMessage -> IO MultiFMessage
-addMultifmessage bs (MultiFMessage (NNFMsgHdr vs vl cs cl)) = do
+addMultifmessage bs (MultiFMessage (NNFMsgHdr vs vl cs cl) nh) = do
   let l = length bs
   let nvl = vl + fromIntegral l
   nvs <- mapM (\(PS pbs pof ple) -> do
      let l' = ple - pof
      p <- mallocForeignPtrArray (fromIntegral l)
-     withForeignPtr pbs (\pbs' -> withForeignPtr p (\p' -> copyBytes p' (castPtr pbs') (ple - pof)))
+     withForeignPtr pbs (\pbs' -> withForeignPtr p (\p' -> copyBytes p' (castPtr pbs' `plusPtr` pof) (ple - pof)))
      return $ NNFIoVec p $ fromIntegral l'
      ) bs
-  return $ MultiFMessage $ NNFMsgHdr (vs ++ nvs) nvl cs cl
+  return $ MultiFMessage (NNFMsgHdr (vs ++ nvs) nvl cs cl) nh
 
 addMultifmessage' :: (Storable m) => [m] -> MultiFMessage -> IO MultiFMessage
-addMultifmessage' ms (MultiFMessage (NNFMsgHdr vs vl cs cl)) = do
+addMultifmessage' ms (MultiFMessage (NNFMsgHdr vs vl cs cl) nh) = do
   let l = length ms
   let nvl = vl + fromIntegral l
   nvs <- initMultifmessage' ms
-  return $ MultiFMessage $ NNFMsgHdr (vs ++ nvs) nvl cs cl
+  return $ MultiFMessage (NNFMsgHdr (vs ++ nvs) nvl cs cl) nh
 
 -- | Finalizer for Message.
 freeMsg :: Message b => b -> IO () -- TODO a with for bracketing
 freeMsg msg = freeNNMsghdr $ getCPtr msg where
   freeNNMsghdr (NNMsgHdr vs vl cs _) = do
-    unless (cs == nullPtr) $ free cs
+    unless (cs == nullPtr) $ do
+      ptr <- peek cs
+      unless (ptr == nullPtr) $ nnFreemsg (castPtr ptr) >>= maybeError "freeMsg header"
+      free cs
     ios <- peekArray (fromIntegral vl) vs
     mapM_ (\(NNIoVec base iol) ->
       if iol == fromIntegral nN_MSG then do
@@ -771,5 +833,137 @@ getSurveyorDeadline s = getIntOption s  NN_SURVEYOR NN_SURVEYOR_DEADLINE
 -- Throws NanoError
 setSurveyorDeadline :: Socket Surveyor -> Int -> IO ()
 setSurveyorDeadline s = setIntOption s NN_SURVEYOR NN_SURVEYOR_DEADLINE
+
+
+-- | Set headers (replace existing headers). Each headers has a content (bytestring), a level and a type (ints). Very boilerplate code --> TODO refactor with an accessor library  --> incomplete implementation, might just work for SingleMessage
+setHeaders' :: NNMsgHdr -> [(BS.ByteString, Int, Int)] -> IO(NNMsgHdr)
+setHeaders' (NNMsgHdr vs nv ch _) hdrs = do
+  ch' <- if ch == nullPtr then do
+     malloc :: IO (Ptr (Ptr (NNCMsgHdr)))
+  else return ch 
+  msgHdr <- newMSgHdr hdrs >>= eitherError "setHeaders"
+  poke ch' msgHdr -- msg init to point on nullptr
+  return $ NNMsgHdr vs nv ch' $ fromIntegral $ length hdrs
+
+setFHeaders' :: NNFMsgHdr -> [(BS.ByteString, Int, Int)] -> IO(NNFMsgHdr)
+setFHeaders' (NNFMsgHdr vs nv ch _) hdrs = do
+  -- TODO manage nullPtr
+  msgHdr <- newMSgHdr hdrs >>= eitherError "setFHeaders"
+  withForeignPtr ch (\p -> poke p msgHdr) -- msg init to point on nullptr
+  -- TODO add foreign finalize with nnFunPtrFreeMsg -- currently  may be deallocated at sent
+  return $ NNFMsgHdr vs nv ch $ fromIntegral $ length hdrs
+
+setRawHeaders' :: (Storable b) => NNMsgHdr -> b -> IO(NNMsgHdr)
+setRawHeaders' (NNMsgHdr vs nv ch _) hdrs = do
+  ch' <- if ch == nullPtr then do
+     malloc :: IO (Ptr (Ptr (NNCMsgHdr)))
+  else return ch 
+  msgHdr <- newRawMsgHdr hdrs >>= eitherError "setHeaders"
+  poke ch' msgHdr -- msg init to point on nullptr
+  return $ NNMsgHdr vs nv ch' $ fromIntegral nN_MSG
+
+setRawFHeaders' :: (Storable b) => NNFMsgHdr -> b -> IO(NNFMsgHdr)
+setRawFHeaders' (NNFMsgHdr vs nv ch _) hdrs = do
+  msgHdr <- newRawMsgHdr hdrs >>= eitherError "setFHeaders"
+  withForeignPtr ch (\p -> poke p msgHdr) -- msg init to point on nullptr
+  -- TODO add foreign finalize with nnFunPtrFreeMsg -- currently  may be deallocated at sent
+  return $ NNFMsgHdr vs nv ch $ fromIntegral nN_MSG
+
+setHeaders :: SingleMessage -> [(BS.ByteString, Int, Int)] -> IO(SingleMessage)
+setHeaders (SingleMessage msghdr _ s) hdrs = do
+   msghdr' <- setHeaders' msghdr hdrs
+   return $ SingleMessage msghdr' (fromIntegral (length hdrs)) s
+
+setFHeaders :: SingleFMessage -> [(BS.ByteString, Int, Int)] -> IO(SingleFMessage)
+setFHeaders (SingleFMessage msghdr _ s) hdrs = do
+   msghdr' <- setFHeaders' msghdr hdrs
+   return $ SingleFMessage msghdr' (fromIntegral (length hdrs)) s
+
+setMHeaders :: MultiMessage -> [(BS.ByteString, Int, Int)] -> IO(MultiMessage)
+setMHeaders (MultiMessage msghdr _) hdrs = do
+   msghdr' <- setHeaders' msghdr hdrs
+   return $ MultiMessage msghdr' $ fromIntegral $ length hdrs
+
+setMFHeaders :: MultiFMessage -> [(BS.ByteString, Int, Int)] -> IO(MultiFMessage)
+setMFHeaders (MultiFMessage msghdr _) hdrs = do
+   msghdr' <- setFHeaders' msghdr hdrs
+   return $ MultiFMessage msghdr' (fromIntegral (length hdrs))
+
+
+getHeaders :: SingleMessage -> IO [(BS.ByteString, Int, Int)]
+getHeaders (SingleMessage (NNMsgHdr _ _ ch _) n _) = do
+    ch' <- peek ch
+    hdrs <- getMSgHdr ch' n >>= eitherError "getHeaders"
+    return hdrs
+
+getFHeaders :: SingleFMessage -> IO [(BS.ByteString, Int, Int)]
+getFHeaders (SingleFMessage (NNFMsgHdr _ _ ch _) n _) = do
+    ch' <- withForeignPtr ch peek
+    hdrs <- getMSgHdr ch' n >>= eitherError "getHeaders"
+    return hdrs
+
+getMHeaders :: MultiMessage -> IO [(BS.ByteString, Int, Int)]
+getMHeaders (MultiMessage (NNMsgHdr _ _ ch _) n) = do
+    ch' <- peek ch
+    hdrs <- getMSgHdr ch' n >>= eitherError "getHeaders"
+    return hdrs
+
+getMFHeaders :: MultiFMessage -> IO [(BS.ByteString, Int, Int)]
+getMFHeaders (MultiFMessage (NNFMsgHdr _ _ ch _) n) = do
+    ch' <- withForeignPtr ch peek
+    hdrs <- getMSgHdr ch' n >>= eitherError "getHeaders"
+    return hdrs
+
+-- Very boilerplate for raw setRaw
+setRawHeaders :: (Storable b) => SingleMessage -> b -> IO(SingleMessage)
+setRawHeaders (SingleMessage msghdr _ s) hdrs = do
+   msghdr' <- setRawHeaders' msghdr hdrs
+   return $ SingleMessage msghdr' (fromIntegral (nN_MSG)) s
+
+setRawFHeaders :: (Storable b) => SingleFMessage -> b -> IO(SingleFMessage)
+setRawFHeaders (SingleFMessage msghdr _ s) hdrs = do
+   msghdr' <- setRawFHeaders' msghdr hdrs
+   return $ SingleFMessage msghdr' (fromIntegral (nN_MSG)) s
+
+setRawMHeaders :: (Storable b) => MultiMessage -> b -> IO(MultiMessage)
+setRawMHeaders (MultiMessage msghdr _) hdrs = do
+   msghdr' <- setRawHeaders' msghdr hdrs
+   return $ MultiMessage msghdr' $ fromIntegral $ nN_MSG
+
+setRawMFHeaders :: (Storable b) => MultiFMessage -> b -> IO(MultiFMessage)
+setRawMFHeaders (MultiFMessage msghdr _) hdrs = do
+   msghdr' <- setRawFHeaders' msghdr hdrs
+   return $ MultiFMessage msghdr' (fromIntegral (nN_MSG))
+
+
+getRawHeaders :: (Storable b) => SingleMessage -> IO b
+getRawHeaders (SingleMessage (NNMsgHdr _ _ ch _) _ _) = do
+    ch' <- peek ch
+    hdrs <- getRawMsgHdr ch' >>= eitherError "getRawHeaders"
+    return hdrs
+
+getRawFHeaders :: (Storable b) => SingleFMessage -> IO b
+getRawFHeaders (SingleFMessage (NNFMsgHdr _ _ ch _) _ _) = do
+    ch' <- withForeignPtr ch peek
+    hdrs <- getRawMsgHdr ch' >>= eitherError "getRawHeaders"
+    return hdrs
+
+getRawMHeaders :: (Storable b) => MultiMessage -> IO b
+getRawMHeaders (MultiMessage (NNMsgHdr _ _ ch _) _) = do
+    ch' <- peek ch
+    hdrs <- getRawMsgHdr ch' >>= eitherError "getRawHeaders"
+    return hdrs
+
+getRawMFHeaders :: (Storable b) => MultiFMessage -> IO b
+getRawMFHeaders (MultiFMessage (NNFMsgHdr _ _ ch _) _) = do
+    ch' <- withForeignPtr ch peek
+    hdrs <- getRawMsgHdr ch' >>= eitherError "getRawHeaders"
+    return hdrs
+
+
+-- data SingleMessage = SingleMessage NNMsgHdr Int Int
+-- data SingleFMessage = SingleFMessage NNFMsgHdr Int Int
+-- data MultiMessage = MultiMessage NNMsgHdr Int
+-- data MultiFMessage = MultiFMessage NNFMsgHdr Int
 
 

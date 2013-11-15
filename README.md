@@ -5,6 +5,8 @@ Current Status
 
 This library is currently in *alpha* stages.
 
+Most of Message sending functionalities are not finished.
+
 Version 0.0.1 - Initial release
 
 Installation
@@ -26,9 +28,13 @@ Examples
 
 The examples folder contains some simple tests, mostly in dev test.
 
+Tests
+--------
+
+TODO : complete quick check test to stabilize/finish/reduce API.
+
 Bugs
 ----
 
-If you find any bugs or other shortcomings I would greatly appreciate a bug
-report, via http://github.com/cheme/nanomsg-hs/issues
+https://github.com/cheme/nanomsg-hs/issues
 

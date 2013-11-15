@@ -23,6 +23,15 @@ import Control.Monad(foldM_)
 import qualified System.NanoMsg as N
 import Control.Monad(foldM)
 import Foreign.C.Types(CUInt)
+
+testBs (PS pbs pof ple) = do
+   let l = ple - pof
+   p <- nnAllocmsg l 0 >>= getEr
+   withForeignPtr pbs (\pbs' -> copyBytes p (castPtr pbs' `plusPtr` pof) l)
+   return $ (l,p)
+
+
+-- Dirty code for testing in progress features.
 main :: IO ()
 main = do
 
@@ -31,12 +40,15 @@ main = do
    -- parameter handling
  case args of 
   [host, port] -> do
-   sockpair1 <- nnSocket AF_SP_RAW NN_REP >>= getEr -- ok
-   --sockpair1 <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
-   ereq <- nnBind sockpair1 "inproc://tsest"
-   sockpair2 <- nnSocket AF_SP_RAW NN_REQ >>= getEr -- ok
-   --sockpair2 <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
-   erep <- nnConnect sockpair2 "inproc://tsest"
+   (l,p) <- testBs "hello"
+   cs <-  BS.packCStringLen ((castPtr p), l)
+   putStrLn $ show cs
+   xRep <- nnSocket AF_SP_RAW NN_REP >>= getEr -- ok
+   --xRep <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
+   ereq <- nnBind xRep "inproc://tsest"
+   xReq <- nnSocket AF_SP_RAW NN_REQ >>= getEr -- ok
+   --xReq <- nnSocket AF_SP NN_PAIR >>= getEr -- ok
+   erep <- nnConnect xReq "inproc://tsest"
    (v1, l1) <- newCAStringLen "Hello"
    (v2, l2) <- newCAStringLen "World"
    let iovec1 = NNIoVec (castPtr v1) (fromIntegral l1)
@@ -67,12 +79,12 @@ main = do
    pokeArray iovecR [iovec1R,iovec2R]
    ptcdataR <- malloc :: IO (Ptr (Ptr (NNCMsgHdr))) -- any ptr TODO in api alloca or foreignfree
    poke ptcdataR nullPtr
-   let msghdrRec = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) (castPtr ptcdataR) 1
+   let msghdrRec = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) (castPtr ptcdataR) (fromIntegral nN_MSG) 
 --   cmsghdr <- peek ptch
    -- overwright in existing struct
-   si <- nnSendmsg sockpair2 msghdr [] >>= getEr
+   si <- nnSendmsg xReq msghdr [] >>= getEr
    putStrLn "msg send successfully"
-   si1 <- nnRecvmsg sockpair1 msghdrRec [] >>= getEr
+   si1 <- nnRecvmsg xRep msghdrRec [] >>= getEr
    putStrLn "msg seemlessly received"
    ptch' <- peek ptcdataR
    id <- if (ptch' /= nullPtr) then do
@@ -94,11 +106,11 @@ main = do
    hdr2 <- newRawMsgHdr id >>= getEr
    poke ptcdataR2 hdr2 
    let msghdr2 = NNMsgHdr (castPtr iovec) (fromIntegral nbvec) (castPtr ptcdataR2) 1
-   si <- nnSendmsg sockpair1 msghdr2 [] >>= getEr
+   si <- nnSendmsg xRep msghdr2 [] >>= getEr
 
    putStrLn $ "msg send size : " ++ show si
    let msghdrRec2 = NNMsgHdr (castPtr iovecR) (fromIntegral nbvec) nullPtr 0
-   si2 <- nnRecvmsg sockpair2 msghdrRec2 [] >>= getEr
+   si2 <- nnRecvmsg xReq msghdrRec2 [] >>= getEr
 
    putStrLn "* Test nn_socket"
    xsocksurveyor <- nnSocket AF_SP_RAW NN_SURVEYOR >>= getEr -- ok
